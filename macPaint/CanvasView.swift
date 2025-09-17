@@ -205,6 +205,10 @@ struct CanvasView: View {
                 isDragging = true
             }
             lastDragLocationInScroll = locationInScroll
+
+        case .bucket:
+            // No drag preview for bucket; do nothing on change
+            break
         }
 
         // Force Canvas to recompute this frame
@@ -258,6 +262,9 @@ struct CanvasView: View {
                 }
             }
             lastDragLocationInScroll = nil
+
+        case .bucket:
+            applyBucketFill(at: point)
         }
         isDragging = false
         incrementDragTick()
@@ -553,6 +560,37 @@ struct CanvasView: View {
         case .rotation:
             return original
         }
+    }
+
+    // MARK: - Bucket
+
+    private func applyBucketFill(at point: CGPoint) {
+        // Find the topmost hit item
+        guard let (layerIndex, id) = hitTest(point: point, tolerance: 0) else { return }
+        guard layers.indices.contains(layerIndex) else { return }
+        var layer = layers[layerIndex]
+        guard let itemIndex = layer.items.firstIndex(where: { $0.id == id }) else { return }
+
+        var item = layer.items[itemIndex]
+        switch item {
+        case .rect(var r):
+            r.fill = selectedColor
+            item = .rect(r)
+        case .ellipse(var e):
+            e.fill = selectedColor
+            item = .ellipse(e)
+        default:
+            // Lines, strokes, images: nothing to fill
+            break
+        }
+
+        layer.items[itemIndex] = item
+        layers[layerIndex] = layer
+
+        // Select the filled item and its layer, for immediate feedback
+        selectedLayerIndex = layerIndex
+        selectedItemID = id
+        touchLayers()
     }
 }
 

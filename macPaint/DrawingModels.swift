@@ -15,6 +15,7 @@ enum Tool: String, CaseIterable, Identifiable {
     case line
     case rectangle
     case ellipse
+    case bucket
 
     var id: String { rawValue }
 
@@ -26,6 +27,9 @@ enum Tool: String, CaseIterable, Identifiable {
         case .line: return "line.diagonal"
         case .rectangle: return "rectangle"
         case .ellipse: return "circle"
+        case .bucket:
+            // SF Symbols: "paintbucket" (macOS 14+). If unavailable, consider adding an asset alias.
+            return "paintbucket"
         }
     }
 
@@ -37,6 +41,7 @@ enum Tool: String, CaseIterable, Identifiable {
         case .line: return "Line"
         case .rectangle: return "Rectangle"
         case .ellipse: return "Ellipse"
+        case .bucket: return "Bucket"
         }
     }
 }
@@ -62,6 +67,8 @@ struct RectItem: Identifiable, Hashable {
     var style: StrokeStyleModel
     var rotation: CGFloat = 0 // radians
     var scale: CGSize = .init(width: 1, height: 1)
+    // New: optional fill color (nil or .clear = no fill)
+    var fill: Color? = nil
 }
 
 struct EllipseItem: Identifiable, Hashable {
@@ -70,6 +77,8 @@ struct EllipseItem: Identifiable, Hashable {
     var style: StrokeStyleModel
     var rotation: CGFloat = 0
     var scale: CGSize = .init(width: 1, height: 1)
+    // New: optional fill color
+    var fill: Color? = nil
 }
 
 struct LineItem: Identifiable, Hashable {
@@ -224,6 +233,10 @@ enum Drawable: Identifiable, Hashable {
                     .translatedBy(x: -center.x, y: -center.y)
                 path = path.applying(t)
             }
+            // Fill first (if present), then stroke
+            if let fill = r.fill, fill != .clear {
+                context.fill(path, with: .color(fill.opacity(layerOpacity)))
+            }
             context.stroke(path, with: .color(r.style.color.opacity(layerOpacity)), lineWidth: r.style.lineWidth)
 
         case .ellipse(let e):
@@ -235,6 +248,9 @@ enum Drawable: Identifiable, Hashable {
                     .rotated(by: e.rotation)
                     .translatedBy(x: -center.x, y: -center.y)
                 path = path.applying(t)
+            }
+            if let fill = e.fill, fill != .clear {
+                context.fill(path, with: .color(fill.opacity(layerOpacity)))
             }
             context.stroke(path, with: .color(e.style.color.opacity(layerOpacity)), lineWidth: e.style.lineWidth)
 
@@ -313,6 +329,10 @@ enum Drawable: Identifiable, Hashable {
             let rect = r.rect.scaled(by: r.scale)
             guard let ctx = NSGraphicsContext.current?.cgContext else {
                 let path = NSBezierPath(roundedRect: rect, xRadius: 2, yRadius: 2)
+                if let fill = r.fill, fill != .clear {
+                    MacColorBridge.nsColor(from: fill).withAlphaComponent(layerOpacity).setFill()
+                    path.fill()
+                }
                 MacColorBridge.nsColor(from: r.style.color).withAlphaComponent(layerOpacity).setStroke()
                 path.lineWidth = r.style.lineWidth
                 path.stroke()
@@ -326,6 +346,11 @@ enum Drawable: Identifiable, Hashable {
                 ctx.translateBy(x: -center.x, y: -center.y)
             }
             let path = CGPath(roundedRect: rect, cornerWidth: 2, cornerHeight: 2, transform: nil)
+            if let fill = r.fill, fill != .clear {
+                ctx.addPath(path)
+                ctx.setFillColor(MacColorBridge.nsColor(from: fill).withAlphaComponent(layerOpacity).cgColor)
+                ctx.fillPath()
+            }
             ctx.addPath(path)
             ctx.setStrokeColor(MacColorBridge.nsColor(from: r.style.color).withAlphaComponent(layerOpacity).cgColor)
             ctx.setLineWidth(r.style.lineWidth)
@@ -336,6 +361,10 @@ enum Drawable: Identifiable, Hashable {
             let rect = e.rect.scaled(by: e.scale)
             guard let ctx = NSGraphicsContext.current?.cgContext else {
                 let path = NSBezierPath(ovalIn: rect)
+                if let fill = e.fill, fill != .clear {
+                    MacColorBridge.nsColor(from: fill).withAlphaComponent(layerOpacity).setFill()
+                    path.fill()
+                }
                 MacColorBridge.nsColor(from: e.style.color).withAlphaComponent(layerOpacity).setStroke()
                 path.lineWidth = e.style.lineWidth
                 path.stroke()
@@ -349,6 +378,11 @@ enum Drawable: Identifiable, Hashable {
                 ctx.translateBy(x: -center.x, y: -center.y)
             }
             let path = CGPath(ellipseIn: rect, transform: nil)
+            if let fill = e.fill, fill != .clear {
+                ctx.addPath(path)
+                ctx.setFillColor(MacColorBridge.nsColor(from: fill).withAlphaComponent(layerOpacity).cgColor)
+                ctx.fillPath()
+            }
             ctx.addPath(path)
             ctx.setStrokeColor(MacColorBridge.nsColor(from: e.style.color).withAlphaComponent(layerOpacity).cgColor)
             ctx.setLineWidth(e.style.lineWidth)

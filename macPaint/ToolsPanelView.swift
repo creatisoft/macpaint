@@ -22,9 +22,13 @@ struct ToolsPanelView: View {
                     HStack(spacing: 8) {
                         Image(systemName: tool.systemImage)
                             .font(.system(size: 16, weight: .medium))
+                            .symbolRenderingMode(.monochrome)
+                            // Keep theme as-is, but make icons white when selected for contrast.
+                            .foregroundStyle(currentTool == tool ? Color.white : Color.primary)
                         Text(tool.displayName)
                             .font(.caption)
                             .lineLimit(1)
+                            .foregroundStyle(Color.primary)
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 10)
@@ -46,7 +50,7 @@ struct ToolsPanelView: View {
                 .help(tool.displayName)
             }
 
-            // Place "Import Image…" button underneath the ellipse button
+            // Place "Import Image…" button underneath the ellipse/bucket buttons
             Divider().padding(.vertical, 4)
 
             Button {
@@ -55,6 +59,8 @@ struct ToolsPanelView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "photo.on.rectangle")
                         .font(.system(size: 16, weight: .medium))
+                        .symbolRenderingMode(.monochrome)
+                        .foregroundStyle(Color.primary)
                     Text("Import Image…")
                         .font(.caption)
                         .lineLimit(1)
