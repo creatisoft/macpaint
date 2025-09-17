@@ -2,7 +2,7 @@
 //  macPaint
 //
 //  Created by Christopher on 9/7/25.
-//
+//  this is a github test. 
 
 import SwiftUI
 import AppKit
