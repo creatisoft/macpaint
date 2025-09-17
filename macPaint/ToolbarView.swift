@@ -212,12 +212,12 @@ struct ToolbarView: View {
                     HStack {
                         Image(systemName: "square.and.arrow.down")
                             .symbolRenderingMode(.monochrome)
-                            .foregroundStyle(Color.black)
+                            .foregroundStyle(Color.white) // ensure icon is visible on blue
                         Text("Save")
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.black)
+                .tint(.blue) // Make the Save button blue
                 .keyboardShortcut("s", modifiers: [.command])
                 .help("Save canvas as PNG")
             }
