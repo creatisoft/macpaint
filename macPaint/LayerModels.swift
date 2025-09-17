@@ -12,6 +12,8 @@ struct Layer: Identifiable, Hashable {
     var isVisible: Bool = true
     var opacity: Double = 1.0
     var items: [Drawable] = []
+    // Optional per-layer fill color (drawn beneath the layer's items)
+    var fillColor: Color? = nil
 
     init(name: String) {
         self.name = name
@@ -55,3 +57,4 @@ enum SelectionHandle {
     case leftCenter
     case rotation
 }
+

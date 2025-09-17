@@ -69,6 +69,13 @@ struct CanvasView: View {
                 for (i, layer) in layers.enumerated() {
                     guard layer.isVisible else { continue }
                     context.drawLayer { layerContext in
+                        // Per-layer fill (under items)
+                        if let fill = layer.fillColor, fill != .clear {
+                            let rect = CGRect(origin: .zero, size: CGSize(width: canvasSize.width, height: canvasSize.height))
+                            let path = Path(rect)
+                            layerContext.fill(path, with: .color(fill.opacity(layer.opacity)))
+                        }
+
                         // Existing committed items
                         for item in layer.items {
                             item.draw(in: layerContext, layerOpacity: layer.opacity)
@@ -565,32 +572,48 @@ struct CanvasView: View {
     // MARK: - Bucket
 
     private func applyBucketFill(at point: CGPoint) {
-        // Find the topmost hit item
-        guard let (layerIndex, id) = hitTest(point: point, tolerance: 0) else { return }
-        guard layers.indices.contains(layerIndex) else { return }
-        var layer = layers[layerIndex]
-        guard let itemIndex = layer.items.firstIndex(where: { $0.id == id }) else { return }
+        // Try to find the topmost hit item
+        if let (layerIndex, id) = hitTest(point: point, tolerance: 0),
+           layers.indices.contains(layerIndex) {
+            var layer = layers[layerIndex]
+            if let itemIndex = layer.items.firstIndex(where: { $0.id == id }) {
+                var item = layer.items[itemIndex]
+                var filledShape = false
 
-        var item = layer.items[itemIndex]
-        switch item {
-        case .rect(var r):
-            r.fill = selectedColor
-            item = .rect(r)
-        case .ellipse(var e):
-            e.fill = selectedColor
-            item = .ellipse(e)
-        default:
-            // Lines, strokes, images: nothing to fill
-            break
+                switch item {
+                case .rect(var r):
+                    r.fill = selectedColor
+                    item = .rect(r)
+                    filledShape = true
+                case .ellipse(var e):
+                    e.fill = selectedColor
+                    item = .ellipse(e)
+                    filledShape = true
+                default:
+                    // Non-fillable item: set the layer's background color instead
+                    filledShape = false
+                }
+
+                if filledShape {
+                    layer.items[itemIndex] = item
+                } else {
+                    layer.fillColor = selectedColor
+                }
+
+                layers[layerIndex] = layer
+                selectedLayerIndex = layerIndex
+                selectedItemID = filledShape ? id : nil
+                touchLayers()
+                return
+            }
         }
 
-        layer.items[itemIndex] = item
-        layers[layerIndex] = layer
-
-        // Select the filled item and its layer, for immediate feedback
-        selectedLayerIndex = layerIndex
-        selectedItemID = id
-        touchLayers()
+        // No item hit: set the selected layer's background color
+        if layers.indices.contains(selectedLayerIndex) {
+            layers[selectedLayerIndex].fillColor = selectedColor
+            selectedItemID = nil
+            touchLayers()
+        }
     }
 }
 

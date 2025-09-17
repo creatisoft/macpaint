@@ -128,6 +128,7 @@ struct ContentView: View {
     private func clearCanvas() {
         for i in layers.indices {
             layers[i].items.removeAll()
+            layers[i].fillColor = nil
         }
         selectedItemID = nil
     }
@@ -205,6 +206,14 @@ struct ContentView: View {
         for layer in layers {
             guard layer.isVisible else { continue }
             cg.beginTransparencyLayer(auxiliaryInfo: nil)
+
+            // Per-layer fill (under items)
+            if let fill = layer.fillColor {
+                let nsFill = MacColorBridge.nsColor(from: fill).withAlphaComponent(layer.opacity)
+                cg.setFillColor(nsFill.cgColor)
+                cg.fill(CGRect(origin: .zero, size: size))
+            }
+
             for item in layer.items {
                 item.drawToNSContext(layerOpacity: layer.opacity)
             }
