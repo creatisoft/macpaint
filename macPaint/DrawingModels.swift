@@ -215,10 +215,10 @@ enum Drawable: Identifiable, Hashable {
 
             if s.isEraser {
                 // Use destination out blend mode for true erasing.
-                // Apply layerOpacity to match export strength.
+                // Important: erase at full strength regardless of layer opacity.
                 var ctx = context
                 ctx.blendMode = .destinationOut
-                ctx.stroke(path, with: .color(.black.opacity(layerOpacity)), style: style)
+                ctx.stroke(path, with: .color(.black), style: style)
             } else {
                 context.stroke(path, with: .color(s.style.color.opacity(layerOpacity)), style: style)
             }
@@ -310,7 +310,8 @@ enum Drawable: Identifiable, Hashable {
 
             if s.isEraser {
                 cg.setBlendMode(.destinationOut)
-                cg.setStrokeColor(NSColor.black.withAlphaComponent(layerOpacity).cgColor)
+                // Erase at full strength (alpha = 1.0), independent of layerOpacity
+                cg.setStrokeColor(NSColor.black.withAlphaComponent(1.0).cgColor)
             } else {
                 let ns = MacColorBridge.nsColor(from: s.style.color).withAlphaComponent(layerOpacity)
                 cg.setStrokeColor(ns.cgColor)
@@ -362,7 +363,7 @@ enum Drawable: Identifiable, Hashable {
             guard let ctx = NSGraphicsContext.current?.cgContext else {
                 let path = NSBezierPath(ovalIn: rect)
                 if let fill = e.fill, fill != .clear {
-                    MacColorBridge.nsColor(from: fill).withAlphaComponent(layerOpacity).setFill()
+                    MacColorBridge.nsColor(from: e.fill!).withAlphaComponent(layerOpacity).setFill()
                     path.fill()
                 }
                 MacColorBridge.nsColor(from: e.style.color).withAlphaComponent(layerOpacity).setStroke()
