@@ -26,13 +26,24 @@ struct ToolbarView: View {
     @State private var hoveredBrush: BrushSize? = nil
     @State private var hoveredPaletteIndex: Int? = nil
 
+    // Fixed palette for neutral hover/selection against white background
+    private let selectionStroke = Color.black // outlines and rings
+    private let selectionFill = Color.black.opacity(0.12) // selected background
+    private let hoverFill = Color.black.opacity(0.06) // hover background
+    private let controlStrokeDim = Color.black.opacity(0.25) // unselected outlines
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 16) {
-                // App title
-                Label("macPaint", systemImage: "paintbrush.pointed.fill")
-                    .font(.system(.title3, design: .rounded, weight: .semibold))
-                    .foregroundStyle(.primary)
+                // App title with icon forced to black
+                HStack(spacing: 6) {
+                    Image(systemName: "paintbrush.pointed.fill")
+                        .symbolRenderingMode(.monochrome)
+                        .foregroundStyle(Color.black)
+                    Text("macPaint")
+                }
+                .font(.system(.title3, design: .rounded, weight: .semibold))
+                .foregroundStyle(Color.black)
 
                 Divider().frame(height: 24)
 
@@ -46,17 +57,17 @@ struct ToolbarView: View {
                                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                                     .fill(
                                         brushSize == size
-                                        ? Color.accentColor.opacity(0.15)
-                                        : (hoveredBrush == size ? Color.secondary.opacity(0.08) : Color.clear)
+                                        ? selectionFill
+                                        : (hoveredBrush == size ? hoverFill : Color.clear)
                                     )
                                 VStack(spacing: 0) {
                                     Circle()
-                                        .stroke(brushSize == size ? Color.accentColor : Color.secondary.opacity(0.3),
+                                        .stroke(brushSize == size ? selectionStroke : controlStrokeDim,
                                                 lineWidth: brushSize == size ? 2 : 1)
                                         .frame(width: 28, height: 28)
                                         .overlay(
                                             Circle()
-                                                .fill(Color.primary)
+                                                .fill(Color.black)
                                                 .frame(width: max(6, CGFloat(size.rawValue)),
                                                        height: max(6, CGFloat(size.rawValue)))
                                         )
@@ -83,13 +94,13 @@ struct ToolbarView: View {
                                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                                     .fill(
                                         selectedColor == color
-                                        ? Color.accentColor.opacity(0.12)
-                                        : (hoveredPaletteIndex == index ? Color.secondary.opacity(0.06) : Color.clear)
+                                        ? selectionFill
+                                        : (hoveredPaletteIndex == index ? hoverFill : Color.clear)
                                     )
                                 ZStack {
                                     Circle().fill(color).frame(width: 22, height: 22)
                                     Circle()
-                                        .stroke(Color.primary.opacity(selectedColor == color ? 0.8 : 0.2),
+                                        .stroke(selectedColor == color ? selectionStroke.opacity(0.9) : controlStrokeDim,
                                                 lineWidth: selectedColor == color ? 2 : 1)
                                         .frame(width: 24, height: 24)
                                 }
@@ -107,13 +118,14 @@ struct ToolbarView: View {
                     } label: {
                         ZStack {
                             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(Color.secondary.opacity(0.06))
+                                .fill(hoverFill)
                             ZStack {
                                 Circle().fill(Color.clear).frame(width: 22, height: 22)
-                                    .overlay(Circle().stroke(Color.secondary.opacity(0.6), lineWidth: 1))
+                                    .overlay(Circle().stroke(controlStrokeDim, lineWidth: 1))
                                 Image(systemName: "plus")
                                     .font(.system(size: 10, weight: .bold))
-                                    .foregroundColor(.secondary)
+                                    .symbolRenderingMode(.monochrome)
+                                    .foregroundStyle(Color.black)
                             }
                         }
                         .frame(width: 30, height: 30)
@@ -128,11 +140,13 @@ struct ToolbarView: View {
                 // Custom canvas size
                 HStack(spacing: 6) {
                     Text("Canvas:")
+                        .foregroundStyle(.black)
                     TextField("W", text: $customWidth)
                         .frame(width: 70)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit(applyCustomSize)
                     Text("×")
+                        .foregroundStyle(.black)
                     TextField("H", text: $customHeight)
                         .frame(width: 70)
                         .textFieldStyle(.roundedBorder)
@@ -141,6 +155,7 @@ struct ToolbarView: View {
                         .buttonStyle(.bordered)
                         .help("Apply custom canvas size")
                 }
+                .tint(.black) // button border/label to black
 
                 Divider().frame(height: 24)
 
@@ -155,14 +170,23 @@ struct ToolbarView: View {
                 HStack(spacing: 8) {
                     Button {
                         withAnimation { zoom = max(0.25, zoom - 0.25) }
-                    } label: { Image(systemName: "minus.magnifyingglass") }
+                    } label: {
+                        Image(systemName: "minus.magnifyingglass")
+                            .symbolRenderingMode(.monochrome)
+                            .foregroundStyle(Color.black)
+                    }
                     .help("Zoom out")
 
                     Text("\(Int(zoom * 100))%").monospacedDigit()
+                        .foregroundStyle(.black)
 
                     Button {
                         withAnimation { zoom = min(4.0, zoom + 0.25) }
-                    } label: { Image(systemName: "plus.magnifyingglass") }
+                    } label: {
+                        Image(systemName: "plus.magnifyingglass")
+                            .symbolRenderingMode(.monochrome)
+                            .foregroundStyle(Color.black)
+                    }
                     .help("Zoom in")
                 }
 
@@ -172,16 +196,28 @@ struct ToolbarView: View {
                 Button {
                     clearCanvas()
                 } label: {
-                    Label("Clear", systemImage: "trash")
+                    HStack {
+                        Image(systemName: "trash")
+                            .symbolRenderingMode(.monochrome)
+                            .foregroundStyle(Color.black)
+                        Text("Clear")
+                    }
                 }
                 .buttonStyle(.bordered)
+                .tint(.black)
 
                 Button {
                     saveAction()
                 } label: {
-                    Label("Save", systemImage: "square.and.arrow.down")
+                    HStack {
+                        Image(systemName: "square.and.arrow.down")
+                            .symbolRenderingMode(.monochrome)
+                            .foregroundStyle(Color.black)
+                        Text("Save")
+                    }
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(.black)
                 .keyboardShortcut("s", modifiers: [.command])
                 .help("Save canvas as PNG")
             }
