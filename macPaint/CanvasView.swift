@@ -94,7 +94,7 @@ struct CanvasView: View {
                     }
                 }
 
-                // Selection overlay drawn on top
+                // Selection overlay drawn on top (skip eraser strokes)
                 if let sel = selectedItem(), layers.indices.contains(selectedLayerIndex) {
                     drawSelectionOverlay(for: sel, in: context)
                 }
@@ -117,6 +117,9 @@ struct CanvasView: View {
     }
 
     private func drawSelectionOverlay(for item: Drawable, in context: GraphicsContext) {
+        // Safety: never show overlay for eraser strokes
+        if case .stroke(let s) = item, s.isEraser { return }
+
         let box = item.boundingBox()
         var path = Path(roundedRect: box.insetBy(dx: -4, dy: -4), cornerRadius: 4)
         context.stroke(path, with: .color(.accentColor), lineWidth: 1)
@@ -232,7 +235,29 @@ struct CanvasView: View {
         switch currentTool {
         case .brush, .eraser:
             if let s = currentStroke {
-                appendItem(.stroke(s))
+                if s.isEraser {
+                    // Find the topmost item hit by any point along the eraser stroke
+                    let tol = max(2, s.style.lineWidth / 2)
+                    var hit: (Int, UUID)? = nil
+                    for p in s.points {
+                        if let res = hitTest(point: p, tolerance: tol) {
+                            hit = res
+                            break
+                        }
+                    }
+
+                    if let (hitLayerIndex, hitID) = hit,
+                       layers.indices.contains(hitLayerIndex),
+                       let itemIndex = layers[hitLayerIndex].items.firstIndex(where: { $0.id == hitID }) {
+                        attachEraserStroke(s, toItemAt: (hitLayerIndex, itemIndex))
+                        // Selection stays as-is; eraser is not selectable
+                    } else {
+                        // No item hit anywhere along the stroke: keep a layer-level eraser
+                        appendItem(.stroke(s))
+                    }
+                } else {
+                    appendItem(.stroke(s))
+                }
                 currentStroke = nil
             }
 
@@ -347,7 +372,10 @@ struct CanvasView: View {
 
     private func selectedItem() -> Drawable? {
         guard layers.indices.contains(selectedLayerIndex) else { return nil }
-        return layers[selectedLayerIndex].items.first(where: { $0.id == selectedItemID })
+        let item = layers[selectedLayerIndex].items.first(where: { $0.id == selectedItemID })
+        // Safety: treat eraser strokes as non-selectable
+        if case .stroke(let s)? = item, s.isEraser { return nil }
+        return item
     }
 
     private func indexOfSelectedItem() -> (layer: Int, item: Int)? {
@@ -367,22 +395,63 @@ struct CanvasView: View {
         var layer = layers[index.layer]
         var item = layer.items[index.item]
 
+        // Never move eraser strokes (they are treated as permanent erasures)
+        if case .stroke(let s) = item, s.isEraser {
+            return
+        }
+
         switch item {
         case .stroke(var s):
             s.points = s.points.map { CGPoint(x: $0.x + delta.width, y: $0.y + delta.height) }
+            // Move item-local erasers with the stroke
+            s.erasers = s.erasers.map { er in
+                var er = er
+                er.points = er.points.map { CGPoint(x: $0.x + delta.width, y: $0.y + delta.height) }
+                return er
+            }
             item = .stroke(s)
         case .rect(var r):
             r.rect = r.rect.offsetBy(dx: delta.width, dy: delta.height)
+            // Erasers are stored in item-local, unrotated space, but as absolute points; translate them too.
+            if !r.erasers.isEmpty {
+                r.erasers = r.erasers.map { er in
+                    var er = er
+                    er.points = er.points.map { CGPoint(x: $0.x + delta.width, y: $0.y + delta.height) }
+                    return er
+                }
+            }
             item = .rect(r)
         case .ellipse(var e):
             e.rect = e.rect.offsetBy(dx: delta.width, dy: delta.height)
+            if !e.erasers.isEmpty {
+                e.erasers = e.erasers.map { er in
+                    var er = er
+                    er.points = er.points.map { CGPoint(x: $0.x + delta.width, y: $0.y + delta.height) }
+                    return er
+                }
+            }
             item = .ellipse(e)
         case .line(var l):
             l.start = CGPoint(x: l.start.x + delta.width, y: l.start.y + delta.height)
             l.end = CGPoint(x: l.end.x + delta.width, y: l.end.y + delta.height)
+            // Line erasers are in canvas space; translate them to move together with the line.
+            if !l.erasers.isEmpty {
+                l.erasers = l.erasers.map { er in
+                    var er = er
+                    er.points = er.points.map { CGPoint(x: $0.x + delta.width, y: $0.y + delta.height) }
+                    return er
+                }
+            }
             item = .line(l)
         case .image(var i):
             i.rect = i.rect.offsetBy(dx: delta.width, dy: delta.height)
+            if !i.erasers.isEmpty {
+                i.erasers = i.erasers.map { er in
+                    var er = er
+                    er.points = er.points.map { CGPoint(x: $0.x + delta.width, y: $0.y + delta.height) }
+                    return er
+                }
+            }
             item = .image(i)
         }
 
@@ -394,8 +463,12 @@ struct CanvasView: View {
         for layerIndex in layers.indices.reversed() {
             let layer = layerIndex < layers.count ? layers[layerIndex] : nil
             guard let layer, layer.isVisible else { continue }
-            for item in layer.items.indices.reversed() {
-                let drawable = layer.items[item]
+            for itemIndex in layer.items.indices.reversed() {
+                let drawable = layer.items[itemIndex]
+
+                // Skip eraser strokes for selection/hit-testing
+                if case .stroke(let s) = drawable, s.isEraser { continue }
+
                 if drawable.hitTest(point: point, tolerance: tolerance) {
                     return (layerIndex, drawable.id)
                 }
@@ -463,6 +536,14 @@ struct CanvasView: View {
                 }
                 l.start = rotate(l.start, around: c, by: angle)
                 l.end = rotate(l.end, around: c, by: angle)
+                // Rotate line erasers (stored in canvas space) around the same center
+                if !l.erasers.isEmpty {
+                    l.erasers = l.erasers.map { er in
+                        var er = er
+                        er.points = er.points.map { rotate($0, around: c, by: angle) }
+                        return er
+                    }
+                }
                 newItem = .line(l)
             case .image(var i):
                 i.rotation = angle
@@ -531,6 +612,14 @@ struct CanvasView: View {
                 }
                 l.start = scalePoint(l.start, around: anchor, sx: sx, sy: sy)
                 l.end = scalePoint(l.end, around: anchor, sx: sx, sy: sy)
+                // Scale line erasers with the same anchor and factors
+                if !l.erasers.isEmpty {
+                    l.erasers = l.erasers.map { er in
+                        var er = er
+                        er.points = er.points.map { scalePoint($0, around: anchor, sx: sx, sy: sy) }
+                        return er
+                    }
+                }
                 newItem = .line(l)
             case .image(var i):
                 let updated = rectByDraggingHandle(handle, from: originalBox, to: currentPoint)
@@ -615,5 +704,69 @@ struct CanvasView: View {
             touchLayers()
         }
     }
-}
 
+    // MARK: - Eraser attach
+
+    private func attachEraserStroke(_ stroke: StrokeItem, toItemAt index: (layer: Int, item: Int)) {
+        guard layers.indices.contains(index.layer),
+              layers[index.layer].items.indices.contains(index.item) else { return }
+        var layer = layers[index.layer]
+        var item = layer.items[index.item]
+
+        let lineWidth = stroke.style.lineWidth
+        let points = stroke.points
+
+        func toEraser(points: [CGPoint]) -> EraserStroke {
+            EraserStroke(points: points, lineWidth: lineWidth)
+        }
+
+        switch item {
+        case .stroke(var s):
+            // Stroke has no rotation property; erasers are stored in canvas coords and translated with the stroke
+            s.erasers.append(toEraser(points: points))
+            item = .stroke(s)
+
+        case .rect(var r):
+            // Convert points into item-local (unrotated) space so eraser rotates with the rect
+            let rect = r.rect.scaled(by: r.scale)
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            let theta = r.rotation
+            let local = points.map { rotatePoint($0, around: center, by: -theta) }
+            r.erasers.append(toEraser(points: local))
+            item = .rect(r)
+
+        case .ellipse(var e):
+            let rect = e.rect.scaled(by: e.scale)
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            let theta = e.rotation
+            let local = points.map { rotatePoint($0, around: center, by: -theta) }
+            e.erasers.append(toEraser(points: local))
+            item = .ellipse(e)
+
+        case .line(var l):
+            // Lines have no persisted rotation; store in canvas coords
+            l.erasers.append(toEraser(points: points))
+            item = .line(l)
+
+        case .image(var i):
+            let rect = i.rect.scaled(by: i.scale)
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            let theta = i.rotation
+            let local = points.map { rotatePoint($0, around: center, by: -theta) }
+            i.erasers.append(toEraser(points: local))
+            item = .image(i)
+        }
+
+        layer.items[index.item] = item
+        layers[index.layer] = layer
+        selectedLayerIndex = index.layer
+        selectedItemID = item.id
+        touchLayers()
+    }
+
+    private func rotatePoint(_ p: CGPoint, around c: CGPoint, by theta: CGFloat) -> CGPoint {
+        let dx = p.x - c.x, dy = p.y - c.y
+        let cosT = cos(theta), sinT = sin(theta)
+        return CGPoint(x: c.x + dx * cosT - dy * sinT, y: c.y + dx * sinT + dy * cosT)
+    }
+}

@@ -52,12 +52,20 @@ struct StrokeStyleModel: Hashable {
     var lineWidth: CGFloat
 }
 
+// Eraser stroke attached to an item (object-local or canvas-local depending on how it was created)
+struct EraserStroke: Hashable {
+    var points: [CGPoint]
+    var lineWidth: CGFloat
+}
+
 // Individual drawable item types
 struct StrokeItem: Identifiable, Hashable {
     let id = UUID()
     var points: [CGPoint]
     var style: StrokeStyleModel
-    var isEraser: Bool = false // Track if this is an eraser stroke
+    var isEraser: Bool = false // Track if this is a layer-level eraser stroke
+    // Item-local erasers that punch holes in this stroke (move with the stroke)
+    var erasers: [EraserStroke] = []
 }
 
 struct RectItem: Identifiable, Hashable {
@@ -69,6 +77,8 @@ struct RectItem: Identifiable, Hashable {
     var scale: CGSize = .init(width: 1, height: 1)
     // New: optional fill color (nil or .clear = no fill)
     var fill: Color? = nil
+    // Item-local erasers (points are stored in the item's local, unrotated space)
+    var erasers: [EraserStroke] = []
 }
 
 struct EllipseItem: Identifiable, Hashable {
@@ -79,6 +89,7 @@ struct EllipseItem: Identifiable, Hashable {
     var scale: CGSize = .init(width: 1, height: 1)
     // New: optional fill color
     var fill: Color? = nil
+    var erasers: [EraserStroke] = []
 }
 
 struct LineItem: Identifiable, Hashable {
@@ -88,6 +99,7 @@ struct LineItem: Identifiable, Hashable {
     var style: StrokeStyleModel
     var rotation: CGFloat = 0
     var scale: CGSize = .init(width: 1, height: 1)
+    var erasers: [EraserStroke] = []
 }
 
 // Bitmap image drawable (stored as NSImage for macOS)
@@ -97,17 +109,29 @@ struct ImageItem: Identifiable {
     var rect: CGRect
     var rotation: CGFloat = 0
     var scale: CGSize = .init(width: 1, height: 1)
+    var erasers: [EraserStroke] = []
 }
 
 // MARK: - Small geometry helpers
 
-private extension CGRect {
+extension CGRect {
     func scaled(by scale: CGSize) -> CGRect {
         var r = self
         r.size.width *= scale.width
         r.size.height *= scale.height
         return r
     }
+}
+
+private func addPolyline(_ points: [CGPoint]) -> Path {
+    var p = Path()
+    if let first = points.first {
+        p.move(to: first)
+        for pt in points.dropFirst() {
+            p.addLine(to: pt)
+        }
+    }
+    return p
 }
 
 // Unified drawable
@@ -209,73 +233,148 @@ enum Drawable: Identifiable, Hashable {
         switch self {
         case .stroke(let s):
             guard s.points.count > 1 else { return }
-            var path = Path()
-            path.addLines(s.points)
-            let style = StrokeStyle(lineWidth: s.style.lineWidth, lineCap: .round, lineJoin: .round)
 
+            // Layer-level eraser stroke remains as-is
             if s.isEraser {
-                // Use destination out blend mode for true erasing.
-                // Important: erase at full strength regardless of layer opacity.
+                var path = addPolyline(s.points)
+                let style = StrokeStyle(lineWidth: s.style.lineWidth, lineCap: .round, lineJoin: .round)
                 var ctx = context
                 ctx.blendMode = .destinationOut
                 ctx.stroke(path, with: .color(.black), style: style)
-            } else {
-                context.stroke(path, with: .color(s.style.color.opacity(layerOpacity)), style: style)
+                return
+            }
+
+            // Draw the stroke inside a transparency layer and apply item-local erasers
+            context.drawLayer { layerCtx in
+                var path = addPolyline(s.points)
+                let style = StrokeStyle(lineWidth: s.style.lineWidth, lineCap: .round, lineJoin: .round)
+                layerCtx.stroke(path, with: .color(s.style.color.opacity(layerOpacity)), style: style)
+
+                // Apply erasers (in the same coordinate space as the stroke points)
+                for e in s.erasers where e.points.count > 1 {
+                    var ePath = addPolyline(e.points)
+                    var eCtx = layerCtx
+                    eCtx.blendMode = .destinationOut
+                    let eStyle = StrokeStyle(lineWidth: e.lineWidth, lineCap: .round, lineJoin: .round)
+                    eCtx.stroke(ePath, with: .color(.black), style: eStyle)
+                }
             }
 
         case .rect(let r):
             let rect = r.rect.scaled(by: r.scale)
-            var path = Path(roundedRect: rect, cornerRadius: 2)
-            if r.rotation != 0 {
-                let center = CGPoint(x: rect.midX, y: rect.midY)
-                let t = CGAffineTransform(translationX: center.x, y: center.y)
-                    .rotated(by: r.rotation)
-                    .translatedBy(x: -center.x, y: -center.y)
-                path = path.applying(t)
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+
+            context.drawLayer { layerCtx in
+                var path = Path(roundedRect: rect, cornerRadius: 2)
+                if r.rotation != 0 {
+                    let t = CGAffineTransform(translationX: center.x, y: center.y)
+                        .rotated(by: r.rotation)
+                        .translatedBy(x: -center.x, y: -center.y)
+                    path = path.applying(t)
+                }
+                if let fill = r.fill, fill != .clear {
+                    layerCtx.fill(path, with: .color(fill.opacity(layerOpacity)))
+                }
+                layerCtx.stroke(path, with: .color(r.style.color.opacity(layerOpacity)), lineWidth: r.style.lineWidth)
+
+                // Erasers drawn in item-local space: rotate context, then stroke local paths
+                if !r.erasers.isEmpty {
+                    var eCtx = layerCtx
+                    if r.rotation != 0 {
+                        eCtx.translateBy(x: center.x, y: center.y)
+                        eCtx.rotate(by: Angle(radians: r.rotation))
+                        eCtx.translateBy(x: -center.x, y: -center.y)
+                    }
+                    for e in r.erasers where e.points.count > 1 {
+                        var ePath = addPolyline(e.points)
+                        eCtx.blendMode = .destinationOut
+                        let eStyle = StrokeStyle(lineWidth: e.lineWidth, lineCap: .round, lineJoin: .round)
+                        eCtx.stroke(ePath, with: .color(.black), style: eStyle)
+                    }
+                }
             }
-            // Fill first (if present), then stroke
-            if let fill = r.fill, fill != .clear {
-                context.fill(path, with: .color(fill.opacity(layerOpacity)))
-            }
-            context.stroke(path, with: .color(r.style.color.opacity(layerOpacity)), lineWidth: r.style.lineWidth)
 
         case .ellipse(let e):
             let rect = e.rect.scaled(by: e.scale)
-            var path = Path(ellipseIn: rect)
-            if e.rotation != 0 {
-                let center = CGPoint(x: rect.midX, y: rect.midY)
-                let t = CGAffineTransform(translationX: center.x, y: center.y)
-                    .rotated(by: e.rotation)
-                    .translatedBy(x: -center.x, y: -center.y)
-                path = path.applying(t)
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+
+            context.drawLayer { layerCtx in
+                var path = Path(ellipseIn: rect)
+                if e.rotation != 0 {
+                    let t = CGAffineTransform(translationX: center.x, y: center.y)
+                        .rotated(by: e.rotation)
+                        .translatedBy(x: -center.x, y: -center.y)
+                    path = path.applying(t)
+                }
+                if let fill = e.fill, fill != .clear {
+                    layerCtx.fill(path, with: .color(fill.opacity(layerOpacity)))
+                }
+                layerCtx.stroke(path, with: .color(e.style.color.opacity(layerOpacity)), lineWidth: e.style.lineWidth)
+
+                if !e.erasers.isEmpty {
+                    var eCtx = layerCtx
+                    if e.rotation != 0 {
+                        eCtx.translateBy(x: center.x, y: center.y)
+                        eCtx.rotate(by: Angle(radians: e.rotation))
+                        eCtx.translateBy(x: -center.x, y: -center.y)
+                    }
+                    for er in e.erasers where er.points.count > 1 {
+                        let ePath = addPolyline(er.points)
+                        eCtx.blendMode = .destinationOut
+                        let eStyle = StrokeStyle(lineWidth: er.lineWidth, lineCap: .round, lineJoin: .round)
+                        eCtx.stroke(ePath, with: .color(.black), style: eStyle)
+                    }
+                }
             }
-            if let fill = e.fill, fill != .clear {
-                context.fill(path, with: .color(fill.opacity(layerOpacity)))
-            }
-            context.stroke(path, with: .color(e.style.color.opacity(layerOpacity)), lineWidth: e.style.lineWidth)
 
         case .line(let l):
-            var path = Path()
-            path.move(to: l.start)
-            path.addLine(to: l.end)
-            // rotation/scale omitted for simplicity on lines (endpoints define it)
-            context.stroke(path, with: .color(l.style.color.opacity(layerOpacity)), lineWidth: l.style.lineWidth)
+            context.drawLayer { layerCtx in
+                var path = Path()
+                path.move(to: l.start)
+                path.addLine(to: l.end)
+                layerCtx.stroke(path, with: .color(l.style.color.opacity(layerOpacity)), lineWidth: l.style.lineWidth)
+
+                // Line has no persisted rotation property affecting drawing; erasers are in canvas coords
+                for er in l.erasers where er.points.count > 1 {
+                    let ePath = addPolyline(er.points)
+                    var eCtx = layerCtx
+                    eCtx.blendMode = .destinationOut
+                    let eStyle = StrokeStyle(lineWidth: er.lineWidth, lineCap: .round, lineJoin: .round)
+                    eCtx.stroke(ePath, with: .color(.black), style: eStyle)
+                }
+            }
 
         case .image(let i):
             let rect = i.rect.scaled(by: i.scale)
-            var ctx = context
-            if i.rotation != 0 {
-                let center = CGPoint(x: rect.midX, y: rect.midY)
-                // GraphicsContext doesn't support anchor parameter; do anchored rotation manually.
-                ctx.translateBy(x: center.x, y: center.y)
-                ctx.rotate(by: Angle(radians: i.rotation))
-                ctx.translateBy(x: -center.x, y: -center.y)
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+
+            context.drawLayer { layerCtx in
+                var ctx = layerCtx
+                if i.rotation != 0 {
+                    ctx.translateBy(x: center.x, y: center.y)
+                    ctx.rotate(by: Angle(radians: i.rotation))
+                    ctx.translateBy(x: -center.x, y: -center.y)
+                }
+
+                // SwiftUI Image draw path
+                let swiftUIImage = Image(nsImage: i.image)
+                ctx.opacity = layerOpacity
+                ctx.draw(swiftUIImage, in: rect)
+
+                // Erasers in item-local space (apply same rotation)
+                for er in i.erasers where er.points.count > 1 {
+                    var eCtx = layerCtx
+                    if i.rotation != 0 {
+                        eCtx.translateBy(x: center.x, y: center.y)
+                        eCtx.rotate(by: Angle(radians: i.rotation))
+                        eCtx.translateBy(x: -center.x, y: -center.y)
+                    }
+                    let ePath = addPolyline(er.points)
+                    eCtx.blendMode = .destinationOut
+                    let eStyle = StrokeStyle(lineWidth: er.lineWidth, lineCap: .round, lineJoin: .round)
+                    eCtx.stroke(ePath, with: .color(.black), style: eStyle)
+                }
             }
-            // SwiftUI Image draw path
-            let swiftUIImage = Image(nsImage: i.image)
-            // Apply layer opacity via context, then draw image
-            ctx.opacity = layerOpacity
-            ctx.draw(swiftUIImage, in: rect)
         }
     }
 
@@ -302,21 +401,34 @@ enum Drawable: Identifiable, Hashable {
                 return
             }
 
-            // Use Core Graphics so we can set blend mode for eraser
+            // Layer-level eraser stroke
+            if s.isEraser {
+                cg.saveGState()
+                cg.setBlendMode(.destinationOut)
+                cg.setLineCap(.round)
+                cg.setLineJoin(.round)
+                cg.setLineWidth(s.style.lineWidth)
+                cg.setStrokeColor(NSColor.black.withAlphaComponent(1.0).cgColor)
+                let path = CGMutablePath()
+                if let first = s.points.first {
+                    path.move(to: first)
+                    for p in s.points.dropFirst() { path.addLine(to: p) }
+                }
+                cg.addPath(path)
+                cg.strokePath()
+                cg.restoreGState()
+                return
+            }
+
+            // Item stroke with attached erasers
             cg.saveGState()
+            cg.beginTransparencyLayer(auxiliaryInfo: nil)
+
             cg.setLineCap(.round)
             cg.setLineJoin(.round)
             cg.setLineWidth(s.style.lineWidth)
-
-            if s.isEraser {
-                cg.setBlendMode(.destinationOut)
-                // Erase at full strength (alpha = 1.0), independent of layerOpacity
-                cg.setStrokeColor(NSColor.black.withAlphaComponent(1.0).cgColor)
-            } else {
-                let ns = MacColorBridge.nsColor(from: s.style.color).withAlphaComponent(layerOpacity)
-                cg.setStrokeColor(ns.cgColor)
-            }
-
+            let ns = MacColorBridge.nsColor(from: s.style.color).withAlphaComponent(layerOpacity)
+            cg.setStrokeColor(ns.cgColor)
             let path = CGMutablePath()
             if let first = s.points.first {
                 path.move(to: first)
@@ -324,6 +436,24 @@ enum Drawable: Identifiable, Hashable {
             }
             cg.addPath(path)
             cg.strokePath()
+
+            for er in s.erasers where er.points.count > 1 {
+                cg.setBlendMode(.destinationOut)
+                cg.setLineCap(.round)
+                cg.setLineJoin(.round)
+                cg.setLineWidth(er.lineWidth)
+                cg.setStrokeColor(NSColor.black.cgColor)
+                let ePath = CGMutablePath()
+                if let f = er.points.first {
+                    ePath.move(to: f)
+                    for p in er.points.dropFirst() { ePath.addLine(to: p) }
+                }
+                cg.addPath(ePath)
+                cg.strokePath()
+                cg.setBlendMode(.normal)
+            }
+
+            cg.endTransparencyLayer()
             cg.restoreGState()
 
         case .rect(let r):
@@ -340,6 +470,7 @@ enum Drawable: Identifiable, Hashable {
                 return
             }
             ctx.saveGState()
+            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
             if r.rotation != 0 {
                 let center = CGPoint(x: rect.midX, y: rect.midY)
                 ctx.translateBy(x: center.x, y: center.y)
@@ -356,6 +487,25 @@ enum Drawable: Identifiable, Hashable {
             ctx.setStrokeColor(MacColorBridge.nsColor(from: r.style.color).withAlphaComponent(layerOpacity).cgColor)
             ctx.setLineWidth(r.style.lineWidth)
             ctx.strokePath()
+
+            // Erasers (item-local; rotation already applied to context)
+            for er in r.erasers where er.points.count > 1 {
+                ctx.setBlendMode(.destinationOut)
+                ctx.setStrokeColor(NSColor.black.cgColor)
+                ctx.setLineCap(.round)
+                ctx.setLineJoin(.round)
+                ctx.setLineWidth(er.lineWidth)
+                let ePath = CGMutablePath()
+                if let f = er.points.first {
+                    ePath.move(to: f)
+                    for p in er.points.dropFirst() { ePath.addLine(to: p) }
+                }
+                ctx.addPath(ePath)
+                ctx.strokePath()
+                ctx.setBlendMode(.normal)
+            }
+
+            ctx.endTransparencyLayer()
             ctx.restoreGState()
 
         case .ellipse(let e):
@@ -372,6 +522,7 @@ enum Drawable: Identifiable, Hashable {
                 return
             }
             ctx.saveGState()
+            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
             if e.rotation != 0 {
                 let center = CGPoint(x: rect.midX, y: rect.midY)
                 ctx.translateBy(x: center.x, y: center.y)
@@ -388,6 +539,24 @@ enum Drawable: Identifiable, Hashable {
             ctx.setStrokeColor(MacColorBridge.nsColor(from: e.style.color).withAlphaComponent(layerOpacity).cgColor)
             ctx.setLineWidth(e.style.lineWidth)
             ctx.strokePath()
+
+            for er in e.erasers where er.points.count > 1 {
+                ctx.setBlendMode(.destinationOut)
+                ctx.setStrokeColor(NSColor.black.cgColor)
+                ctx.setLineCap(.round)
+                ctx.setLineJoin(.round)
+                ctx.setLineWidth(er.lineWidth)
+                let ePath = CGMutablePath()
+                if let f = er.points.first {
+                    ePath.move(to: f)
+                    for p in er.points.dropFirst() { ePath.addLine(to: p) }
+                }
+                ctx.addPath(ePath)
+                ctx.strokePath()
+                ctx.setBlendMode(.normal)
+            }
+
+            ctx.endTransparencyLayer()
             ctx.restoreGState()
 
         case .line(let l):
@@ -401,11 +570,30 @@ enum Drawable: Identifiable, Hashable {
                 return
             }
             ctx.saveGState()
+            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
             ctx.setLineWidth(l.style.lineWidth)
             ctx.setStrokeColor(MacColorBridge.nsColor(from: l.style.color).withAlphaComponent(layerOpacity).cgColor)
             ctx.move(to: l.start)
             ctx.addLine(to: l.end)
             ctx.strokePath()
+
+            for er in l.erasers where er.points.count > 1 {
+                ctx.setBlendMode(.destinationOut)
+                ctx.setStrokeColor(NSColor.black.cgColor)
+                ctx.setLineCap(.round)
+                ctx.setLineJoin(.round)
+                ctx.setLineWidth(er.lineWidth)
+                let ePath = CGMutablePath()
+                if let f = er.points.first {
+                    ePath.move(to: f)
+                    for p in er.points.dropFirst() { ePath.addLine(to: p) }
+                }
+                ctx.addPath(ePath)
+                ctx.strokePath()
+                ctx.setBlendMode(.normal)
+            }
+
+            ctx.endTransparencyLayer()
             ctx.restoreGState()
 
         case .image(let i):
@@ -414,6 +602,7 @@ enum Drawable: Identifiable, Hashable {
             let rect = i.rect.scaled(by: i.scale)
 
             ctx.saveGState()
+            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
             if i.rotation != 0 {
                 let center = CGPoint(x: rect.midX, y: rect.midY)
                 ctx.translateBy(x: center.x, y: center.y)
@@ -423,6 +612,24 @@ enum Drawable: Identifiable, Hashable {
             ctx.setAlpha(layerOpacity)
             ctx.interpolationQuality = .high
             ctx.draw(cgImage, in: rect)
+
+            for er in i.erasers where er.points.count > 1 {
+                ctx.setBlendMode(.destinationOut)
+                ctx.setStrokeColor(NSColor.black.cgColor)
+                ctx.setLineCap(.round)
+                ctx.setLineJoin(.round)
+                ctx.setLineWidth(er.lineWidth)
+                let ePath = CGMutablePath()
+                if let f = er.points.first {
+                    ePath.move(to: f)
+                    for p in er.points.dropFirst() { ePath.addLine(to: p) }
+                }
+                ctx.addPath(ePath)
+                ctx.strokePath()
+                ctx.setBlendMode(.normal)
+            }
+
+            ctx.endTransparencyLayer()
             ctx.restoreGState()
         }
     }
@@ -458,4 +665,3 @@ extension NSImage {
         return cgImage
     }
 }
-
