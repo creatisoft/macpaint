@@ -5,6 +5,8 @@ A lightweight, layer-based drawing app built with SwiftUI for macOS. It provides
 - Platform: macOS (SwiftUI + AppKit bridges where needed)
 - Rendering: SwiftUI Canvas for on-screen drawing, Core Graphics for export (pixel parity)
 - Status: Early preview (single-session, no document persistence yet)
+  
+- This is vibe coded. 
 
 ## Preview
 
