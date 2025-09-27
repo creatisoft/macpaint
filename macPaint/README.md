@@ -2,57 +2,17 @@
 
 A lightweight, layer-based drawing app built with SwiftUI for macOS. It provides a simple canvas, core vector tools (brush, line, rectangle, ellipse), image import, per-layer visibility/opacity, selection and transform handles, and pixel-perfect export to PNG.
 
-## Overview
-
 - Platform: macOS (SwiftUI + AppKit bridges where needed)
 - Rendering: SwiftUI Canvas for on-screen drawing, Core Graphics for export (pixel parity)
-- Layers: Ordered array; items on higher rows render above lower rows
-- Tools: Select, Brush, Eraser, Line, Rectangle, Ellipse
-- Import: Place an image as a new layer, auto-centered and scaled to fit
-- Export: Save as PNG using an NSBitmapImageRep that matches SwiftUI’s y-down coordinates
+- Status: Early preview (single-session, no document persistence yet)
 
-## Layout
+## Preview
 
-The app is composed of three primary regions:
+- Screenshots / GIFs
+  - Add your screenshots here (e.g., Docs/Images/overview.png)
+  - Short demo GIF recommended
 
-- Top Toolbar (ToolbarView)
-  - Brush size picker (Small / Medium / Large)
-  - Color palette + system color panel
-  - Canvas size controls (W × H + Apply)
-  - Background color picker
-  - Zoom controls
-  - Clear and Save buttons
-
-- Left Tools Panel (ToolsPanelView)
-  - Tool buttons (Select, Brush, Eraser, Line, Rectangle, Ellipse)
-  - Import Image… button
-
-- Center Canvas (CanvasView)
-  - Scrollable, zoomable drawing surface
-  - Live previews while drawing shapes/strokes
-  - Selection overlay with resize/rotation handles
-
-- Right Layers Panel (LayersPanelView)
-  - List of layers with rename, visibility toggle, opacity slider
-  - Move Up/Down arrows per row
-  - Context menu actions (Rename, Delete Layer)
-
-## Recent Enhancements (Layers)
-
-- Context Menu: “Delete Layer”
-  - Disabled when there is only one layer or when the row is the last/topmost layer
-  - Maintains sensible selection after deletion
-
-- Move Controls: Up/Down arrows per layer row
-  - Arrows always visible
-  - Up arrow enabled when the row can move up (index > 0)
-  - Down arrow enabled when the row can move down (index < last index)
-  - Selection index updates to follow the moved layer
-
-- Post-Add Behavior
-  - After adding a layer, it is auto-selected and its movement arrows reflect what’s currently possible
-
-## Core Features
+## Features
 
 - Drawing tools
   - Brush/Eraser: pressure-insensitive freehand strokes with round caps/joins
@@ -77,7 +37,63 @@ The app is composed of three primary regions:
   - Save to PNG via a high-DPI-aware bitmap context
   - Matches on-screen compositing (including eraser’s destinationOut blend mode)
 
-## App Structure
+## Requirements
+
+- Xcode 26
+
+## Installation
+
+- Clone the repository
+- Open the Xcode project/workspace
+- Select the macOS target
+- Build and run (⌘R)
+
+No external dependencies are required.
+
+## Usage
+
+- Choose a tool from the left Tools panel (Select, Brush, Eraser, Line, Rectangle, Ellipse)
+- Draw on the canvas in the center
+- Manage layers from the right Layers panel (rename, visibility, opacity, reorder, delete)
+- Adjust brush size and color from the top toolbar
+- Change canvas size, background color, and zoom from the top toolbar
+- Import an image via the Tools panel; it’s placed as a new layer, auto-centered and scaled to fit
+- Export to PNG from the toolbar (Save)
+
+## Keyboard Shortcuts
+
+- Save: Command + S
+- Zoom In/Out: via toolbar buttons (add your own shortcuts if desired)
+- Selection tips:
+  - Right-click a layer row for context actions (Rename, Delete Layer)
+  - Use the rotation handle (above selection box) to rotate shapes and images
+  - Use the eraser tool for true erasing within the active layer
+
+## Layer Ordering
+
+- The layers array is rendered from bottom (index 0) to top (last index)
+- Hit-testing checks from the topmost layer downward
+- Moving rows:
+  - Up arrow: move toward index 0 (row moves higher in the list)
+  - Down arrow: move toward the last index (row moves lower in the list)
+- After adding a layer, it is auto-selected and movement arrows reflect what’s currently possible
+
+## Recent Enhancements (Layers)
+
+- Context Menu: “Delete Layer”
+  - Disabled when there is only one layer or when the row is the last/topmost layer
+  - Maintains sensible selection after deletion
+
+- Move Controls: Up/Down arrows per layer row
+  - Arrows always visible
+  - Up arrow enabled when the row can move up (index > 0)
+  - Down arrow enabled when the row can move down (index < last index)
+  - Selection index updates to follow the moved layer
+
+- Post-Add Behavior
+  - After adding a layer, it is auto-selected and its movement arrows reflect what’s currently possible
+
+## Project Structure
 
 - macPaintApp.swift
   - App entry point; hosts ContentView
@@ -122,41 +138,9 @@ The app is composed of three primary regions:
 - ColorPanelTarget.swift
   - AppKit target/action trampoline for NSColorPanel changes
 
-## Layer Ordering
-
-- The layers array is rendered from bottom (index 0) to top (last index)
-- Hit-testing checks from the topmost layer downward
-- Moving rows:
-  - Up arrow: move toward index 0 (row moves higher in the list)
-  - Down arrow: move toward the last index (row moves lower in the list)
-
-## Shortcuts & Tips
-
-- Save: Command + S
-- Right-click a layer row for context actions (Rename, Delete Layer)
-- Use the rotation handle (above selection box) to rotate shapes and images
-- Use the eraser tool for true erasing within the active layer
-
 ## Building & Running
 
 - Open the project in Xcode (macOS target)
 - Build and run (⌘R)
 - Requires macOS 12+ for best color bridging; earlier versions gracefully fall back
 
-## Known Limitations
-
-- Rotation is ignored in hit-testing (bounding boxes are axis-aligned)
-- Lines do not apply rotation/scale beyond their endpoints
-- No persistence of documents/layers between launches (single-session)
-
-## Future Ideas
-
-- Filled shapes and stroke/fill controls
-- Text items
-- Per-layer blend modes and masks
-- Snap-to-grid/guides
-- Document persistence (save/load projects)
-
----
-
-If you’re exploring the code, start at ContentView.swift to see state and composition, then dive into CanvasView.swift for drawing/gestures and LayersPanelView.swift for the layer management UI.
