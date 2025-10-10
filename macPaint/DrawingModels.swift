@@ -102,14 +102,19 @@ struct LineItem: Identifiable, Hashable {
     var erasers: [EraserStroke] = []
 }
 
-// Bitmap image drawable (stored as NSImage for macOS)
+// Bitmap image drawable stored as raw data to avoid retaining NSImage directly
 struct ImageItem: Identifiable {
     let id = UUID()
-    var image: NSImage
+    var imageData: Data
     var rect: CGRect
     var rotation: CGFloat = 0
     var scale: CGSize = .init(width: 1, height: 1)
     var erasers: [EraserStroke] = []
+
+    // Computed NSImage for drawing/export
+    var image: NSImage? {
+        NSImage(data: imageData)
+    }
 }
 
 // MARK: - Small geometry helpers
@@ -152,7 +157,7 @@ enum Drawable: Identifiable, Hashable {
         }
     }
 
-    // Provide custom Hashable/Equatable so we can carry NSImage in ImageItem without requiring Hashable
+    // Provide custom Hashable/Equatable so we can carry non-Hashable payloads via identity
     static func == (lhs: Drawable, rhs: Drawable) -> Bool {
         lhs.id == rhs.id
     }
@@ -357,7 +362,8 @@ enum Drawable: Identifiable, Hashable {
                 }
 
                 // SwiftUI Image draw path
-                let swiftUIImage = Image(nsImage: i.image)
+                guard let nsImg = i.image else { return }
+                let swiftUIImage = Image(nsImage: nsImg)
                 ctx.opacity = layerOpacity
                 ctx.draw(swiftUIImage, in: rect)
 
@@ -598,7 +604,7 @@ enum Drawable: Identifiable, Hashable {
 
         case .image(let i):
             guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-            guard let cgImage = i.image.toCGImage() else { return }
+            guard let cgImage = i.image?.toCGImage() else { return }
             let rect = i.rect.scaled(by: i.scale)
 
             ctx.saveGState()
@@ -665,3 +671,4 @@ extension NSImage {
         return cgImage
     }
 }
+

@@ -8,6 +8,8 @@ import SwiftUI
 import AppKit
 
 struct CanvasView: View {
+    @Environment(\.undoManager) private var undoManager
+
     // External state
     @Binding var layers: [Layer]
     @Binding var selectedLayerIndex: Int
@@ -41,6 +43,11 @@ struct CanvasView: View {
     @State private var activeHandle: SelectionHandle? = nil
     @State private var originalItemState: Drawable? = nil
 
+    // Undo grouping snapshot
+    @State private var layersSnapshotBeforeGesture: [Layer]? = nil
+    @State private var selectedLayerIndexBeforeGesture: Int? = nil
+    @State private var selectedItemIDBeforeGesture: UUID? = nil
+
     var body: some View {
         ZStack {
             Color(nsColor: .underPageBackgroundColor)
@@ -51,6 +58,10 @@ struct CanvasView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                     .coordinateSpace(name: scrollCoordinateSpace)
             }
+        }
+        // Safety net: anytime layers change (including undo/redo), keep selection valid
+        .onChange(of: layers) { _ in
+            clampSelectionToCurrentLayers()
         }
     }
 
@@ -158,24 +169,115 @@ struct CanvasView: View {
             .onEnded { handleDragEnded($0) }
     }
 
+    private func beginUndoGestureSnapshotIfNeeded() {
+        if layersSnapshotBeforeGesture == nil {
+            layersSnapshotBeforeGesture = layers
+            selectedLayerIndexBeforeGesture = selectedLayerIndex
+            selectedItemIDBeforeGesture = selectedItemID
+        }
+    }
+
+    private func commitUndoGestureSnapshotIfNeeded(actionName: String) {
+        guard let beforeLayers = layersSnapshotBeforeGesture else { return }
+        let beforeSelLayer = selectedLayerIndexBeforeGesture ?? selectedLayerIndex
+        let beforeSelItem = selectedItemIDBeforeGesture
+
+        let afterLayers = layers
+        let afterSelLayer = selectedLayerIndex
+        let afterSelItem = selectedItemID
+
+        // Determine if anything actually changed
+        if beforeLayers != afterLayers || beforeSelLayer != afterSelLayer || beforeSelItem != afterSelItem {
+            // Clamp indices to safe ranges for both snapshots
+            let clampedBeforeSelLayer = clampIndex(beforeSelLayer, for: beforeLayers)
+            let clampedAfterSelLayer = clampIndex(afterSelLayer, for: afterLayers)
+
+            // Validate selected item for the "before" snapshot
+            let validBeforeItemID: UUID? = {
+                guard beforeLayers.indices.contains(clampedBeforeSelLayer) else { return nil }
+                let items = beforeLayers[clampedBeforeSelLayer].items
+                if let id = beforeSelItem, items.contains(where: { $0.id == id }) {
+                    return id
+                }
+                return nil
+            }()
+
+            // Validate selected item for the "after" snapshot
+            let validAfterItemID: UUID? = {
+                guard afterLayers.indices.contains(clampedAfterSelLayer) else { return nil }
+                let items = afterLayers[clampedAfterSelLayer].items
+                if let id = afterSelItem, items.contains(where: { $0.id == id }) {
+                    return id
+                }
+                return nil
+            }()
+
+            registerUndo(actionName) {
+                layers = beforeLayers
+                selectedLayerIndex = clampedBeforeSelLayer
+                selectedItemID = validBeforeItemID
+            } redo: {
+                layers = afterLayers
+                selectedLayerIndex = clampedAfterSelLayer
+                selectedItemID = validAfterItemID
+            }
+        }
+
+        layersSnapshotBeforeGesture = nil
+        selectedLayerIndexBeforeGesture = nil
+        selectedItemIDBeforeGesture = nil
+    }
+
+    private func clampIndex(_ index: Int, for layers: [Layer]) -> Int {
+        return min(max(0, index), max(0, layers.count - 1))
+    }
+
+    // Pair undo/redo like ContentView/LayersPanelView to avoid one-way snapshots
+    private func registerUndo(_ actionName: String, undo: @escaping () -> Void, redo: @escaping () -> Void) {
+        undoManager?.registerUndo(withTarget: VoidBox { undo() }) { _ in
+            undo()
+            self.undoManager?.setActionName(actionName)
+            self.undoManager?.registerUndo(withTarget: VoidBox { redo() }) { _ in
+                redo()
+                self.undoManager?.setActionName(actionName)
+                // Re-register the inverse for subsequent undo
+                self.registerUndo(actionName, undo: undo, redo: redo)
+            }
+        }
+        undoManager?.setActionName(actionName)
+    }
+
+    // Class-based target for UndoManager closures
+    private final class VoidBox {
+        let action: () -> Void
+        init(_ action: @escaping () -> Void) { self.action = action }
+    }
+
     private func handleDragChanged(_ value: DragGesture.Value) {
         let locationInScroll = value.location
         let point = logicalPoint(from: locationInScroll)
 
         switch currentTool {
         case .brush, .eraser:
+            if currentStroke == nil {
+                beginUndoGestureSnapshotIfNeeded()
+            }
             beginStrokeIfNeeded(at: point)
             currentStroke?.points.append(point)
             isDragging = true
 
         case .line, .rectangle, .ellipse:
-            if currentShapeStart == nil { currentShapeStart = point }
+            if currentShapeStart == nil {
+                beginUndoGestureSnapshotIfNeeded()
+                currentShapeStart = point
+            }
             updateTempShape(to: point)
             isDragging = true
 
         case .select:
             // Treat the first onChanged as "drag start"
             if lastDragLocationInScroll == nil {
+                beginUndoGestureSnapshotIfNeeded()
                 // If we started on a different item than currently selected, select it immediately
                 if let (idx, id) = hitTest(point: point, tolerance: selectHitTolerance) {
                     if selectedItemID != id || selectedLayerIndex != idx {
@@ -260,12 +362,14 @@ struct CanvasView: View {
                 }
                 currentStroke = nil
             }
+            commitUndoGestureSnapshotIfNeeded(actionName: "Draw Stroke")
 
         case .line:
             if case .line(let l)? = currentTempDrawable {
                 appendItem(.line(l))
                 currentTempDrawable = nil
                 currentShapeStart = nil
+                commitUndoGestureSnapshotIfNeeded(actionName: "Draw Line")
             }
 
         case .rectangle:
@@ -273,6 +377,7 @@ struct CanvasView: View {
                 appendItem(.rect(r))
                 currentTempDrawable = nil
                 currentShapeStart = nil
+                commitUndoGestureSnapshotIfNeeded(actionName: "Draw Rectangle")
             }
 
         case .ellipse:
@@ -280,6 +385,7 @@ struct CanvasView: View {
                 appendItem(.ellipse(e))
                 currentTempDrawable = nil
                 currentShapeStart = nil
+                commitUndoGestureSnapshotIfNeeded(actionName: "Draw Ellipse")
             }
 
         case .select:
@@ -294,9 +400,12 @@ struct CanvasView: View {
                 }
             }
             lastDragLocationInScroll = nil
+            commitUndoGestureSnapshotIfNeeded(actionName: "Transform Selection")
 
         case .bucket:
+            beginUndoGestureSnapshotIfNeeded()
             applyBucketFill(at: point)
+            commitUndoGestureSnapshotIfNeeded(actionName: "Bucket Fill")
         }
         isDragging = false
         incrementDragTick()
@@ -768,5 +877,22 @@ struct CanvasView: View {
         let dx = p.x - c.x, dy = p.y - c.y
         let cosT = cos(theta), sinT = sin(theta)
         return CGPoint(x: c.x + dx * cosT - dy * sinT, y: c.y + dx * sinT + dy * cosT)
+    }
+
+    // MARK: - Selection safety
+
+    private func clampSelectionToCurrentLayers() {
+        // Clamp the selected layer index
+        selectedLayerIndex = clampIndex(selectedLayerIndex, for: layers)
+        // Ensure the selected item exists in the current selected layer; otherwise clear it
+        if let id = selectedItemID,
+           layers.indices.contains(selectedLayerIndex) {
+            let items = layers[selectedLayerIndex].items
+            if !items.contains(where: { $0.id == id }) {
+                selectedItemID = nil
+            }
+        } else {
+            selectedItemID = nil
+        }
     }
 }

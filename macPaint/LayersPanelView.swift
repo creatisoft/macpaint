@@ -7,6 +7,8 @@
 import SwiftUI
 
 struct LayersPanelView: View {
+    @Environment(\.undoManager) private var undoManager
+
     @Binding var layers: [Layer]
     @Binding var selectedLayerIndex: Int
 
@@ -39,19 +41,35 @@ struct LayersPanelView: View {
             .background(Color(nsColor: .underPageBackgroundColor))
             Divider()
             List(selection: Binding(get: {
-                Set([selectedLayerIndex])
+                // Selection must match row identity (UUID)
+                guard layers.indices.contains(selectedLayerIndex) else { return Set<UUID>() }
+                return Set([layers[selectedLayerIndex].id])
             }, set: { newSelection in
-                if let idx = newSelection.first, layers.indices.contains(idx) {
+                if let selID = newSelection.first,
+                   let idx = layers.firstIndex(where: { $0.id == selID }) {
                     selectedLayerIndex = idx
+                } else if !layers.isEmpty {
+                    selectedLayerIndex = clampIndex(selectedLayerIndex, for: layers)
                 }
             })) {
-                ForEach(Array(layers.enumerated()), id: \.1.id) { index, layer in
+                ForEach(Array(layers.enumerated()), id: \.1.id) { initialIndex, layer in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             if renamingLayerID == layer.id {
                                 TextField("Layer", text: Binding(
-                                    get: { layers[index].name },
-                                    set: { newValue in layers[index].name = newValue }
+                                    get: {
+                                        if let idx = currentIndex(for: layer.id) {
+                                            return layers[idx].name
+                                        }
+                                        return ""
+                                    },
+                                    set: { newValue in
+                                        guard let idx = currentIndex(for: layer.id) else { return }
+                                        let before = layers
+                                        layers[idx].name = newValue
+                                        let after = layers
+                                        registerUndoLayersChange(action: "Rename Layer", before: before, after: after)
+                                    }
                                 ))
                                 .textFieldStyle(.plain)
                                 .focused($isRenamingFocused)
@@ -61,18 +79,23 @@ struct LayersPanelView: View {
                                     if !focused && renamingLayerID == layer.id { finishRenaming() }
                                 }
                             } else {
-                                Text(layers[index].name).lineLimit(1)
+                                Text(layerName(for: layer.id))
+                                    .lineLimit(1)
                             }
 
                             Spacer()
                             Button {
-                                layers[index].isVisible.toggle()
+                                guard let idx = currentIndex(for: layer.id) else { return }
+                                let before = layers
+                                layers[idx].isVisible.toggle()
+                                let after = layers
+                                registerUndoLayersChange(action: layers[idx].isVisible ? "Show Layer" : "Hide Layer", before: before, after: after)
                             } label: {
-                                Image(systemName: layer.isVisible ? "eye" : "eye.slash")
-                                    .foregroundStyle(layer.isVisible ? .primary : .secondary)
+                                Image(systemName: isVisible(for: layer.id) ? "eye" : "eye.slash")
+                                    .foregroundStyle(isVisible(for: layer.id) ? .primary : .secondary)
                             }
                             .buttonStyle(.borderless)
-                            .help(layer.isVisible ? "Hide layer" : "Show layer")
+                            .help(isVisible(for: layer.id) ? "Hide layer" : "Show layer")
                         }
 
                         // Opacity slider
@@ -81,8 +104,16 @@ struct LayersPanelView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Slider(value: Binding(
-                                get: { layers[index].opacity },
-                                set: { layers[index].opacity = $0 }
+                                get: {
+                                    opacity(for: layer.id)
+                                },
+                                set: { newVal in
+                                    guard let idx = currentIndex(for: layer.id) else { return }
+                                    let before = layers
+                                    layers[idx].opacity = newVal
+                                    let after = layers
+                                    registerUndoLayersChange(action: "Change Layer Opacity", before: before, after: after)
+                                }
                             ), in: 0...1)
                         }
 
@@ -90,40 +121,63 @@ struct LayersPanelView: View {
                         // Up = move toward top of the list (lower index). Down = move toward bottom (higher index).
                         HStack(spacing: 8) {
                             Button {
-                                moveRowUp(index)
+                                if let idx = currentIndex(for: layer.id) {
+                                    moveRowUp(idx)
+                                }
                             } label: {
                                 Image(systemName: "arrow.up")
                             }
                             .buttonStyle(.borderless)
                             .controlSize(.mini)
                             .help("Move layer up")
-                            .disabled(!canMoveRowUp(index))
+                            .disabled({
+                                guard let idx = currentIndex(for: layer.id) else { return true }
+                                return !canMoveRowUp(idx)
+                            }())
 
                             Button {
-                                moveRowDown(index)
+                                if let idx = currentIndex(for: layer.id) {
+                                    moveRowDown(idx)
+                                }
                             } label: {
                                 Image(systemName: "arrow.down")
                             }
                             .buttonStyle(.borderless)
                             .controlSize(.mini)
                             .help("Move layer down")
-                            .disabled(!canMoveRowDown(index))
+                            .disabled({
+                                guard let idx = currentIndex(for: layer.id) else { return true }
+                                return !canMoveRowDown(idx)
+                            }())
                         }
                     }
                     .padding(.vertical, 6)
                     .contentShape(Rectangle())
-                    .background(index == selectedLayerIndex ? Color.accentColor.opacity(0.1) : Color.clear)
-                    .onTapGesture { selectedLayerIndex = index }
+                    .background({
+                        if let idx = currentIndex(for: layer.id), idx == selectedLayerIndex {
+                            Color.accentColor.opacity(0.1)
+                        } else {
+                            Color.clear
+                        }
+                    }())
+                    .onTapGesture {
+                        if let idx = currentIndex(for: layer.id) {
+                            selectedLayerIndex = idx
+                        }
+                    }
                     .contextMenu {
                         Button("Rename") {
                             renamingLayerID = layer.id
-                            selectedLayerIndex = index
+                            if let idx = currentIndex(for: layer.id) {
+                                selectedLayerIndex = idx
+                            }
                         }
-                        // Delete Layer: disabled when only one layer OR this row is the last/topmost layer (highest index)
                         Button("Delete Layer") {
-                            deleteLayer(at: index)
+                            if let idx = currentIndex(for: layer.id) {
+                                deleteLayer(at: idx)
+                            }
                         }
-                        .disabled(layers.count <= 1 || index == layers.count - 1)
+                        .disabled(layers.count <= 1)
                     }
                 }
                 .onMove(perform: moveLayers)
@@ -141,6 +195,27 @@ struct LayersPanelView: View {
         isRenamingFocused = false
     }
 
+    // MARK: - Safe access helpers
+
+    private func currentIndex(for id: UUID) -> Int? {
+        layers.firstIndex(where: { $0.id == id })
+    }
+
+    private func layerName(for id: UUID) -> String {
+        guard let idx = currentIndex(for: id) else { return "" }
+        return layers[idx].name
+    }
+
+    private func isVisible(for id: UUID) -> Bool {
+        guard let idx = currentIndex(for: id) else { return false }
+        return layers[idx].isVisible
+    }
+
+    private func opacity(for id: UUID) -> Double {
+        guard let idx = currentIndex(for: id) else { return 1.0 }
+        return layers[idx].opacity
+    }
+
     // MARK: - Movement helpers (list-order semantics)
 
     private func canMoveRowUp(_ index: Int) -> Bool {
@@ -155,8 +230,12 @@ struct LayersPanelView: View {
 
     private func moveRowUp(_ index: Int) {
         guard canMoveRowUp(index) else { return }
-        // Corrected: move item at 'index' to 'index - 1'
+        let before = layers
+        // Move item at 'index' to 'index - 1'
         layers.move(fromOffsets: IndexSet(integer: index), toOffset: index - 1)
+        let after = layers
+        registerUndoLayersChange(action: "Move Layer Up", before: before, after: after)
+
         // Adjust selection
         if selectedLayerIndex == index {
             selectedLayerIndex = index - 1
@@ -167,8 +246,12 @@ struct LayersPanelView: View {
 
     private func moveRowDown(_ index: Int) {
         guard canMoveRowDown(index) else { return }
+        let before = layers
         // Move item at 'index' to just after 'index + 1'
         layers.move(fromOffsets: IndexSet(integer: index), toOffset: index + 2)
+        let after = layers
+        registerUndoLayersChange(action: "Move Layer Down", before: before, after: after)
+
         // Adjust selection
         if selectedLayerIndex == index {
             selectedLayerIndex = index + 1
@@ -181,8 +264,11 @@ struct LayersPanelView: View {
 
     private func deleteLayer(at index: Int) {
         guard layers.indices.contains(index) else { return }
-        // Prevent deleting if only one layer, or if it's the last/topmost layer (highest index)
-        guard layers.count > 1, index != layers.count - 1 else { return }
+        // Allow deletion of any layer as long as at least one remains
+        guard layers.count > 1 else { return }
+
+        let before = layers
+        let beforeSelection = selectedLayerIndex
 
         layers.remove(at: index)
 
@@ -192,6 +278,56 @@ struct LayersPanelView: View {
         } else if selectedLayerIndex > index {
             selectedLayerIndex -= 1
         }
+
+        let after = layers
+        let afterSelection = selectedLayerIndex
+
+        registerUndoLayersChange(
+            action: "Delete Layer",
+            before: before,
+            after: after,
+            beforeSelection: beforeSelection,
+            afterSelection: afterSelection
+        )
+    }
+
+    // MARK: - Undo helpers
+
+    private func registerUndoLayersChange(action: String, before: [Layer], after: [Layer], beforeSelection: Int? = nil, afterSelection: Int? = nil) {
+        let prevSelection = clampIndex(beforeSelection ?? selectedLayerIndex, for: before)
+        let nextSelection = clampIndex(afterSelection ?? selectedLayerIndex, for: after)
+
+        registerUndo(action) {
+            layers = before
+            selectedLayerIndex = prevSelection
+        } redo: {
+            layers = after
+            selectedLayerIndex = nextSelection
+        }
+    }
+
+    private func clampIndex(_ index: Int, for layers: [Layer]) -> Int {
+        return min(max(0, index), max(0, layers.count - 1))
+    }
+
+    private func registerUndo(_ actionName: String, undo: @escaping () -> Void, redo: @escaping () -> Void) {
+        undoManager?.registerUndo(withTarget: VoidBox { undo() }) { _ in
+            undo()
+            self.undoManager?.setActionName(actionName)
+            // Register the redo as the inverse
+            self.undoManager?.registerUndo(withTarget: VoidBox { redo() }) { _ in
+                redo()
+                self.undoManager?.setActionName(actionName)
+                // Re-register the undo again to complete the cycle
+                self.registerUndo(actionName, undo: undo, redo: redo)
+            }
+        }
+        undoManager?.setActionName(actionName)
+    }
+
+    // Simple wrapper so we can use registerUndo with closures easily (target must be a class/AnyObject)
+    private final class VoidBox {
+        let action: () -> Void
+        init(_ action: @escaping () -> Void) { self.action = action }
     }
 }
-

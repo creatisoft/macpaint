@@ -9,6 +9,9 @@ import AppKit
 import UniformTypeIdentifiers
 
 struct ContentView: View {
+    // Undo
+    @Environment(\.undoManager) private var undoManager
+
     // Layer system
     @State private var layers: [Layer] = []
     @State private var selectedLayerIndex: Int = 0
@@ -25,12 +28,13 @@ struct ContentView: View {
     @State private var customWidth: String = "1024"
     @State private var customHeight: String = "768"
     @State private var backgroundColor: Color = .white
+    @State private var lastBackgroundColorForUndo: Color = .white
 
     // UI
     @State private var zoom: CGFloat = 1.0
 
     // Color panel bridging
-    @State private var colorPanelTarget = ColorPanelTarget()
+    @StateObject private var colorPanelTarget = ColorPanelTarget()
 
     private let palette: [Color] = [
         .black, .gray, .red, .orange, .yellow,
@@ -81,16 +85,67 @@ struct ContentView: View {
             customWidth = String(Int(canvasSize.width))
             customHeight = String(Int(canvasSize.height))
             initializeLayers()
+            lastBackgroundColorForUndo = backgroundColor
         }
+        // Background color undo registration (coarse; fires frequently during dragging)
+        .onChange(of: backgroundColor) { newValue in
+            let previous = lastBackgroundColorForUndo
+            registerUndo("Change Background Color") {
+                backgroundColor = previous
+            } redo: {
+                backgroundColor = newValue
+            }
+            lastBackgroundColorForUndo = newValue
+        }
+    }
+
+    // MARK: - Undo helpers
+
+    private func registerUndo(_ actionName: String, undo: @escaping () -> Void, redo: (() -> Void)? = nil) {
+        undoManager?.registerUndo(withTarget: VoidBox { undo() }) { box in
+            let oldRedo = redo
+            undo() // perform undo
+            self.undoManager?.setActionName(actionName)
+            if let oldRedo {
+                // Register redo as the inverse
+                self.undoManager?.registerUndo(withTarget: VoidBox { oldRedo() }) { redoBox in
+                    oldRedo()
+                    self.undoManager?.setActionName(actionName)
+                    // Re-register undo again
+                    self.registerUndo(actionName, undo: undo, redo: oldRedo)
+                }
+            }
+        }
+        undoManager?.setActionName(actionName)
+    }
+
+    // Simple wrapper so we can use registerUndo with closures easily
+    private final class VoidBox {
+        let action: () -> Void
+        init(_ action: @escaping () -> Void) { self.action = action }
     }
 
     // MARK: - Layers management
 
     private func insertNewLayer(named name: String, at index: Int) {
+        let beforeLayers = layers
+        let beforeSelection = selectedLayerIndex
+
         let new = Layer(name: name)
         let insertIndex = max(0, min(index, layers.count))
         layers.insert(new, at: insertIndex)
         selectedLayerIndex = insertIndex
+
+        let afterLayers = layers
+        let afterSelection = selectedLayerIndex
+
+        registerUndo("Insert Layer") {
+            layers = beforeLayers
+            selectedLayerIndex = beforeSelection
+        } redo: {
+            layers = afterLayers
+            selectedLayerIndex = afterSelection
+        }
     }
 
     private func addLayer() {
@@ -100,13 +155,41 @@ struct ContentView: View {
     }
 
     private func removeSelectedLayer() {
-        guard layers.indices.contains(selectedLayerIndex), layers.count > 1 else { return }
+        guard layers.count > 1, layers.indices.contains(selectedLayerIndex) else { return }
+        let beforeLayers = layers
+        let beforeSelection = selectedLayerIndex
+
         layers.remove(at: selectedLayerIndex)
-        selectedLayerIndex = min(selectedLayerIndex, max(0, layers.count - 1))
+        selectedLayerIndex = min(selectedLayerIndex, layers.count - 1)
+
+        let afterLayers = layers
+        let afterSelection = selectedLayerIndex
+
+        registerUndo("Delete Layer") {
+            layers = beforeLayers
+            selectedLayerIndex = beforeSelection
+        } redo: {
+            layers = afterLayers
+            selectedLayerIndex = afterSelection
+        }
     }
 
     private func moveLayers(from offsets: IndexSet, to destination: Int) {
+        let beforeLayers = layers
+        let beforeSelection = selectedLayerIndex
+
         layers.move(fromOffsets: offsets, toOffset: destination)
+
+        let afterLayers = layers
+        let afterSelection = selectedLayerIndex
+
+        registerUndo("Move Layers") {
+            layers = beforeLayers
+            selectedLayerIndex = beforeSelection
+        } redo: {
+            layers = afterLayers
+            selectedLayerIndex = afterSelection
+        }
     }
 
     private func initializeLayers() {
@@ -120,28 +203,58 @@ struct ContentView: View {
     private func applyCustomSize() {
         guard let w = Double(customWidth), let h = Double(customHeight),
               w > 0, h > 0, w <= 10000, h <= 10000 else { return }
-        canvasSize = CanvasSize(width: CGFloat(w), height: CGFloat(h))
+
+        let before = canvasSize
+        let newSize = CanvasSize(width: CGFloat(w), height: CGFloat(h))
+        canvasSize = newSize
+
+        registerUndo("Change Canvas Size") {
+            canvasSize = before
+            customWidth = String(Int(before.width))
+            customHeight = String(Int(before.height))
+        } redo: {
+            canvasSize = newSize
+            customWidth = String(Int(newSize.width))
+            customHeight = String(Int(newSize.height))
+        }
     }
 
     // MARK: - Actions
 
     private func clearCanvas() {
-        for i in layers.indices {
-            layers[i].items.removeAll()
-            layers[i].fillColor = nil
+        let beforeLayers = layers
+        let beforeSelection = selectedItemID
+
+        layers.indices.forEach { index in
+            layers[index].items.removeAll()
+            layers[index].fillColor = nil
         }
         selectedItemID = nil
+
+        let afterLayers = layers
+        let afterSelection = selectedItemID
+
+        registerUndo("Clear Canvas") {
+            layers = beforeLayers
+            selectedItemID = beforeSelection
+        } redo: {
+            layers = afterLayers
+            selectedItemID = afterSelection
+        }
     }
 
     private func saveAsPNG() {
         let imageSize = CGSize(width: canvasSize.width, height: canvasSize.height)
 
         // Render to bitmap
-        guard let bitmap = renderBitmap(size: imageSize) else { return }
+        guard let bitmap = renderBitmap(size: imageSize) else { 
+            print("Failed to render bitmap for save operation")
+            return 
+        }
 
         // Save panel
         let panel = NSSavePanel()
-        panel.allowedFileTypes = ["png"]
+        panel.allowedContentTypes = [.png]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = "Artwork.png"
         panel.isExtensionHidden = false
@@ -149,8 +262,14 @@ struct ContentView: View {
 
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            if let data = bitmap.representation(using: .png, properties: [:]) {
-                try? data.write(to: url)
+            do {
+                if let data = bitmap.representation(using: .png, properties: [:]) {
+                    try data.write(to: url)
+                } else {
+                    print("Failed to create PNG data from bitmap")
+                }
+            } catch {
+                print("Failed to save file: \(error.localizedDescription)")
             }
         }
     }
@@ -258,7 +377,13 @@ struct ContentView: View {
         panel.title = "Import Image"
 
         panel.begin { response in
-            guard response == .OK, let url = panel.url, let nsImage = NSImage(contentsOf: url) else { return }
+            guard response == .OK, let url = panel.url else { return }
+            guard let data = try? Data(contentsOf: url),
+                  let nsImage = NSImage(data: data) else { return }
+
+            let beforeLayers = layers
+            let beforeSelectionLayer = selectedLayerIndex
+            let beforeSelectedItem = selectedItemID
 
             // Compute a target rect that fits the image nicely within the canvas (max 70% of canvas)
             let canvasW = canvasSize.width
@@ -284,7 +409,7 @@ struct ContentView: View {
             insertNewLayer(named: newLayerName, at: insertIndex)
 
             // Create the image item and add to the new layer
-            let imageItem = ImageItem(image: nsImage, rect: rect, rotation: 0, scale: .init(width: 1, height: 1))
+            let imageItem = ImageItem(imageData: data, rect: rect, rotation: 0, scale: .init(width: 1, height: 1))
             let drawable = Drawable.image(imageItem)
             layers[insertIndex].items.append(drawable)
 
@@ -294,6 +419,20 @@ struct ContentView: View {
 
             // Switch to Select tool so the user can immediately resize/move the image
             currentTool = .select
+
+            let afterLayers = layers
+            let afterSelectionLayer = selectedLayerIndex
+            let afterSelectedItem = selectedItemID
+
+            registerUndo("Import Image") {
+                layers = beforeLayers
+                selectedLayerIndex = beforeSelectionLayer
+                selectedItemID = beforeSelectedItem
+            } redo: {
+                layers = afterLayers
+                selectedLayerIndex = afterSelectionLayer
+                selectedItemID = afterSelectedItem
+            }
         }
     }
 }
