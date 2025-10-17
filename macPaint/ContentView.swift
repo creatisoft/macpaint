@@ -102,27 +102,20 @@ struct ContentView: View {
     // MARK: - Undo helpers
 
     private func registerUndo(_ actionName: String, undo: @escaping () -> Void, redo: (() -> Void)? = nil) {
-        undoManager?.registerUndo(withTarget: VoidBox { undo() }) { box in
-            let oldRedo = redo
-            undo() // perform undo
-            self.undoManager?.setActionName(actionName)
-            if let oldRedo {
-                // Register redo as the inverse
-                self.undoManager?.registerUndo(withTarget: VoidBox { oldRedo() }) { redoBox in
-                    oldRedo()
-                    self.undoManager?.setActionName(actionName)
-                    // Re-register undo again
-                    self.registerUndo(actionName, undo: undo, redo: oldRedo)
+        guard let undoManager = undoManager else { return }
+
+        // Use the UndoManager (an AnyObject) as the target, and pair undo/redo without targeting self (a struct).
+        undoManager.registerUndo(withTarget: undoManager) { _ in
+            undo()
+            undoManager.setActionName(actionName)
+            if let redo = redo {
+                undoManager.registerUndo(withTarget: undoManager) { _ in
+                    redo()
+                    undoManager.setActionName(actionName)
                 }
             }
         }
-        undoManager?.setActionName(actionName)
-    }
-
-    // Simple wrapper so we can use registerUndo with closures easily
-    private final class VoidBox {
-        let action: () -> Void
-        init(_ action: @escaping () -> Void) { self.action = action }
+        undoManager.setActionName(actionName)
     }
 
     // MARK: - Layers management
@@ -222,6 +215,28 @@ struct ContentView: View {
     // MARK: - Actions
 
     private func clearCanvas() {
+        // Confirm destructive operation
+        let alert = NSAlert()
+        alert.messageText = "Clear Canvas?"
+        alert.informativeText = "This will remove all items from all layers. This cannot be undone."
+        alert.alertStyle = .warning
+
+        // Add buttons
+        let clearButton = alert.addButton(withTitle: "Clear")
+        alert.addButton(withTitle: "Cancel")
+
+        // Tint the destructive button red
+        clearButton.contentTintColor = NSColor.systemRed
+
+        // Optional: make Return key activate Clear (destructive) intentionally
+        clearButton.keyEquivalent = "\r"
+        clearButton.keyEquivalentModifierMask = []
+
+        // Run modally
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else { return }
+
+        // Proceed with clear and register undo/redo
         let beforeLayers = layers
         let beforeSelection = selectedItemID
 
@@ -247,9 +262,13 @@ struct ContentView: View {
         let imageSize = CGSize(width: canvasSize.width, height: canvasSize.height)
 
         // Render to bitmap
-        guard let bitmap = renderBitmap(size: imageSize) else { 
-            print("Failed to render bitmap for save operation")
-            return 
+        guard let bitmap = renderBitmap(size: imageSize) else {
+            let alert = NSAlert()
+            alert.messageText = "Failed to render image"
+            alert.informativeText = "An unknown error occurred while rendering the canvas."
+            alert.alertStyle = .warning
+            alert.runModal()
+            return
         }
 
         // Save panel
@@ -262,14 +281,26 @@ struct ContentView: View {
 
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
+
+            // Create PNG data
+            guard let data = bitmap.representation(using: .png, properties: [:]) else {
+                let alert = NSAlert()
+                alert.messageText = "Failed to create PNG data"
+                alert.informativeText = "The image could not be encoded as PNG."
+                alert.alertStyle = .warning
+                alert.runModal()
+                return
+            }
+
+            // Write to disk with error handling
             do {
-                if let data = bitmap.representation(using: .png, properties: [:]) {
-                    try data.write(to: url)
-                } else {
-                    print("Failed to create PNG data from bitmap")
-                }
+                try data.write(to: url)
             } catch {
-                print("Failed to save file: \(error.localizedDescription)")
+                let alert = NSAlert()
+                alert.messageText = "Failed to save image"
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.runModal()
             }
         }
     }
@@ -378,8 +409,29 @@ struct ContentView: View {
 
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            guard let data = try? Data(contentsOf: url),
-                  let nsImage = NSImage(data: data) else { return }
+
+            // Load data with error handling
+            let imageData: Data
+            do {
+                imageData = try Data(contentsOf: url)
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = "Failed to read image file"
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.runModal()
+                return
+            }
+
+            // Decode image
+            guard let nsImage = NSImage(data: imageData) else {
+                let alert = NSAlert()
+                alert.messageText = "Unsupported image format"
+                alert.informativeText = "The selected file could not be decoded as an image."
+                alert.alertStyle = .warning
+                alert.runModal()
+                return
+            }
 
             let beforeLayers = layers
             let beforeSelectionLayer = selectedLayerIndex
@@ -409,7 +461,7 @@ struct ContentView: View {
             insertNewLayer(named: newLayerName, at: insertIndex)
 
             // Create the image item and add to the new layer
-            let imageItem = ImageItem(imageData: data, rect: rect, rotation: 0, scale: .init(width: 1, height: 1))
+            let imageItem = ImageItem(imageData: imageData, rect: rect, rotation: 0, scale: .init(width: 1, height: 1))
             let drawable = Drawable.image(imageItem)
             layers[insertIndex].items.append(drawable)
 
@@ -440,4 +492,3 @@ struct ContentView: View {
 #Preview {
     ContentView()
 }
-

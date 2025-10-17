@@ -519,7 +519,7 @@ enum Drawable: Identifiable, Hashable {
             guard let ctx = NSGraphicsContext.current?.cgContext else {
                 let path = NSBezierPath(ovalIn: rect)
                 if let fill = e.fill, fill != .clear {
-                    MacColorBridge.nsColor(from: e.fill!).withAlphaComponent(layerOpacity).setFill()
+                    MacColorBridge.nsColor(from: fill).withAlphaComponent(layerOpacity).setFill()
                     path.fill()
                 }
                 MacColorBridge.nsColor(from: e.style.color).withAlphaComponent(layerOpacity).setStroke()

@@ -234,23 +234,19 @@ struct CanvasView: View {
 
     // Pair undo/redo like ContentView/LayersPanelView to avoid one-way snapshots
     private func registerUndo(_ actionName: String, undo: @escaping () -> Void, redo: @escaping () -> Void) {
-        undoManager?.registerUndo(withTarget: VoidBox { undo() }) { _ in
+        guard let undoManager = undoManager else { return }
+
+        // Use the UndoManager itself as the AnyObject target and avoid targeting this struct.
+        undoManager.registerUndo(withTarget: undoManager) { _ in
             undo()
-            self.undoManager?.setActionName(actionName)
-            self.undoManager?.registerUndo(withTarget: VoidBox { redo() }) { _ in
+            undoManager.setActionName(actionName)
+            // Register redo
+            undoManager.registerUndo(withTarget: undoManager) { _ in
                 redo()
-                self.undoManager?.setActionName(actionName)
-                // Re-register the inverse for subsequent undo
-                self.registerUndo(actionName, undo: undo, redo: redo)
+                undoManager.setActionName(actionName)
             }
         }
-        undoManager?.setActionName(actionName)
-    }
-
-    // Class-based target for UndoManager closures
-    private final class VoidBox {
-        let action: () -> Void
-        init(_ action: @escaping () -> Void) { self.action = action }
+        undoManager.setActionName(actionName)
     }
 
     private func handleDragChanged(_ value: DragGesture.Value) {
@@ -472,6 +468,10 @@ struct CanvasView: View {
     }
 
     private func logicalPoint(from locationInScroll: CGPoint) -> CGPoint {
+        // Validate geometry; if not ready, return a safe fallback
+        guard canvasFrameInScroll != .zero else {
+            return .zero
+        }
         let origin = CGPoint(x: canvasFrameInScroll.midX, y: canvasFrameInScroll.midY)
         let translated = CGPoint(x: locationInScroll.x - origin.x, y: locationInScroll.y - origin.y)
         let z = max(zoom, .leastNonzeroMagnitude)
@@ -896,3 +896,4 @@ struct CanvasView: View {
         }
     }
 }
+

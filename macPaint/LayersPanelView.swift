@@ -311,23 +311,18 @@ struct LayersPanelView: View {
     }
 
     private func registerUndo(_ actionName: String, undo: @escaping () -> Void, redo: @escaping () -> Void) {
-        undoManager?.registerUndo(withTarget: VoidBox { undo() }) { _ in
+        guard let undoManager = undoManager else { return }
+
+        // Use the UndoManager itself as the AnyObject target and avoid recursive re-registration.
+        undoManager.registerUndo(withTarget: undoManager) { _ in
             undo()
-            self.undoManager?.setActionName(actionName)
-            // Register the redo as the inverse
-            self.undoManager?.registerUndo(withTarget: VoidBox { redo() }) { _ in
+            undoManager.setActionName(actionName)
+            // Register redo
+            undoManager.registerUndo(withTarget: undoManager) { _ in
                 redo()
-                self.undoManager?.setActionName(actionName)
-                // Re-register the undo again to complete the cycle
-                self.registerUndo(actionName, undo: undo, redo: redo)
+                undoManager.setActionName(actionName)
             }
         }
-        undoManager?.setActionName(actionName)
-    }
-
-    // Simple wrapper so we can use registerUndo with closures easily (target must be a class/AnyObject)
-    private final class VoidBox {
-        let action: () -> Void
-        init(_ action: @escaping () -> Void) { self.action = action }
+        undoManager.setActionName(actionName)
     }
 }
