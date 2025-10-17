@@ -5,8 +5,9 @@
 //
 
 import AppKit
+import Combine
 
-final class ColorPanelTarget: NSObject {
+final class ColorPanelTarget: NSObject, ObservableObject {
     var onChange: ((NSColor) -> Void)?
 
     @objc func colorPanelDidChange(_ sender: NSColorPanel) {
