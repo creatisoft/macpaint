@@ -97,6 +97,22 @@ struct ContentView: View {
             }
             lastBackgroundColorForUndo = newValue
         }
+        // Expose focused actions for menu commands
+        .focusedSceneValue(\.setToolAction, { tool in
+            currentTool = tool
+        })
+        .focusedSceneValue(\.deleteSelectionAction, {
+            deleteSelectedItem()
+        })
+        .focusedSceneValue(\.zoomInAction, {
+            withAnimation { zoomIn() }
+        })
+        .focusedSceneValue(\.zoomOutAction, {
+            withAnimation { zoomOut() }
+        })
+        .focusedSceneValue(\.zoomResetAction, {
+            withAnimation { resetZoom() }
+        })
     }
 
     // MARK: - Undo helpers
@@ -486,6 +502,45 @@ struct ContentView: View {
                 selectedItemID = afterSelectedItem
             }
         }
+    }
+
+    // MARK: - Edit: Delete selection
+
+    private func deleteSelectedItem() {
+        guard layers.indices.contains(selectedLayerIndex),
+              let selID = selectedItemID,
+              let itemIndex = layers[selectedLayerIndex].items.firstIndex(where: { $0.id == selID }) else {
+            return
+        }
+
+        let beforeLayers = layers
+        let beforeSelectedItem = selectedItemID
+
+        layers[selectedLayerIndex].items.remove(at: itemIndex)
+        selectedItemID = nil
+
+        let afterLayers = layers
+        let afterSelectedItem = selectedItemID
+
+        registerUndo("Delete Item") {
+            layers = beforeLayers
+            selectedItemID = beforeSelectedItem
+        } redo: {
+            layers = afterLayers
+            selectedItemID = afterSelectedItem
+        }
+    }
+
+    // MARK: - View: Zoom helpers
+
+    private func zoomIn() {
+        zoom = min(4.0, zoom + 0.25)
+    }
+    private func zoomOut() {
+        zoom = max(0.25, zoom - 0.25)
+    }
+    private func resetZoom() {
+        zoom = 1.0
     }
 }
 

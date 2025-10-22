@@ -48,6 +48,11 @@ struct CanvasView: View {
     @State private var selectedLayerIndexBeforeGesture: Int? = nil
     @State private var selectedItemIDBeforeGesture: UUID? = nil
 
+    // Bucket feedback state
+    @State private var showBucketFlash: Bool = false
+    @State private var bucketFlashOpacity: Double = 0.0
+    @State private var toastMessage: String? = nil
+
     var body: some View {
         ZStack {
             Color(nsColor: .underPageBackgroundColor)
@@ -112,6 +117,40 @@ struct CanvasView: View {
             }
             .frame(width: canvasSize.width, height: canvasSize.height)
             .clipped()
+
+            // Bucket flash overlay
+            if showBucketFlash {
+                Rectangle()
+                    .fill(Color.white.opacity(0.001)) // minimal fill to receive animation
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 2)
+                            .strokeBorder(Color.accentColor.opacity(bucketFlashOpacity), lineWidth: 6)
+                    )
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+
+            // Toast notification
+            if let message = toastMessage {
+                VStack {
+                    Text(message)
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.black.opacity(0.75))
+                        )
+                        .foregroundStyle(Color.white)
+                        .shadow(radius: 4)
+                    Spacer()
+                }
+                .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
+                .padding(.top, 8)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
         }
         .background(
             GeometryReader { proxy in
@@ -796,6 +835,7 @@ struct CanvasView: View {
                     layer.items[itemIndex] = item
                 } else {
                     layer.fillColor = selectedColor
+                    triggerBucketFeedback(message: "Filled layer background")
                 }
 
                 layers[layerIndex] = layer
@@ -811,6 +851,33 @@ struct CanvasView: View {
             layers[selectedLayerIndex].fillColor = selectedColor
             selectedItemID = nil
             touchLayers()
+            triggerBucketFeedback(message: "Filled layer background")
+        }
+    }
+
+    private func triggerBucketFeedback(message: String) {
+        toastMessage = message
+        showBucketFlash = true
+        bucketFlashOpacity = 0.0
+
+        // Animate a quick pulse of the border opacity
+        withAnimation(.easeOut(duration: 0.08)) {
+            bucketFlashOpacity = 1.0
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            withAnimation(.easeIn(duration: 0.18)) {
+                bucketFlashOpacity = 0.0
+            }
+        }
+        // Hide flash after fade
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            showBucketFlash = false
+        }
+        // Hide toast shortly after
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                toastMessage = nil
+            }
         }
     }
 
@@ -896,4 +963,3 @@ struct CanvasView: View {
         }
     }
 }
-
