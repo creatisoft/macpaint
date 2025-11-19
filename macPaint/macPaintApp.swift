@@ -88,7 +88,7 @@ private extension macPaintApp {
         let options: [NSApplication.AboutPanelOptionKey: Any] = [
             .credits: credits,
             // You can also override other keys if desired, e.g.:
-             .applicationVersion: "0.1.0",
+             .applicationVersion: "0.4.0",
             // .applicationName: "macPaint"
         ]
         NSApplication.shared.orderFrontStandardAboutPanel(options: options)
