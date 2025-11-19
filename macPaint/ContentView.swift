@@ -237,16 +237,18 @@ struct ContentView: View {
         alert.informativeText = "This will remove all items from all layers. This cannot be undone."
         alert.alertStyle = .warning
 
-        // Add buttons
+        // Add buttons (first = default candidate, right-most)
         let clearButton = alert.addButton(withTitle: "Clear")
-        alert.addButton(withTitle: "Cancel")
+        let cancelButton = alert.addButton(withTitle: "Cancel")
 
-        // Tint the destructive button red
-        clearButton.contentTintColor = NSColor.systemRed
-
-        // Optional: make Return key activate Clear (destructive) intentionally
+        // Remove custom tinting so the default (blue) button renders correctly
+        // Keep Clear as default (Return)
         clearButton.keyEquivalent = "\r"
         clearButton.keyEquivalentModifierMask = []
+
+        // Make Cancel respond to Escape
+        cancelButton.keyEquivalent = "\u{1b}"
+        cancelButton.keyEquivalentModifierMask = []
 
         // Run modally
         let response = alert.runModal()
