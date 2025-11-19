@@ -57,6 +57,10 @@ struct CanvasView: View {
     // Drag-and-drop state
     @State private var isImageDropTargeted: Bool = false
 
+    // Cursor state (fallback for when SwiftUI .cursor is unavailable)
+    @State private var isHoveringCanvas: Bool = false
+    @State private var cursorPushed: Bool = false
+
     var body: some View {
         ZStack {
             Color(nsColor: .underPageBackgroundColor)
@@ -76,9 +80,11 @@ struct CanvasView: View {
 
     private var drawingSurface: some View {
         ZStack {
+            // Paper with subtle shadow
             Rectangle()
                 .fill(backgroundColor)
                 .frame(width: canvasSize.width, height: canvasSize.height)
+                .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 3)
 
             Canvas { context, _ in
                 // Explicitly read these so Canvas recomputes on every drag tick and while dragging
@@ -122,6 +128,12 @@ struct CanvasView: View {
             .frame(width: canvasSize.width, height: canvasSize.height)
             .clipped()
 
+            // Subtle paper border
+            RoundedRectangle(cornerRadius: 2)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+                .frame(width: canvasSize.width, height: canvasSize.height)
+                .allowsHitTesting(false)
+
             // Bucket flash overlay
             if showBucketFlash {
                 Rectangle()
@@ -135,7 +147,7 @@ struct CanvasView: View {
                     .transition(.opacity)
             }
 
-            // Toast notification
+            // Toast notification (adaptive material)
             if let message = toastMessage {
                 VStack {
                     Text(message)
@@ -143,10 +155,10 @@ struct CanvasView: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.black.opacity(0.75))
+                            .regularMaterial,
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                         )
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(.primary)
                         .shadow(radius: 4)
                     Spacer()
                 }
@@ -178,6 +190,37 @@ struct CanvasView: View {
         .animation(.easeInOut(duration: 0.2), value: canvasSize)
         .animation(.easeInOut(duration: 0.2), value: zoom)
         .gesture(primaryGesture())
+        // Fallback cursor handling for macOS when SwiftUI .cursor(_:) is unavailable
+        .onHover { inside in
+            isHoveringCanvas = inside
+            if inside {
+                cursorForTool(currentTool).push()
+                cursorPushed = true
+            } else {
+                if cursorPushed {
+                    NSCursor.pop()
+                    cursorPushed = false
+                }
+            }
+        }
+        .onChange(of: currentTool) { _ in
+            // Update cursor immediately if the tool changes while hovering
+            if isHoveringCanvas {
+                if cursorPushed {
+                    NSCursor.pop()
+                    cursorPushed = false
+                }
+                cursorForTool(currentTool).push()
+                cursorPushed = true
+            }
+        }
+        .onDisappear {
+            // Ensure we clean up the cursor stack if the view goes away while hovered
+            if cursorPushed {
+                NSCursor.pop()
+                cursorPushed = false
+            }
+        }
         .onDrop(of: [.image], isTargeted: $isImageDropTargeted) { providers, location in
             handleImageDrop(providers: providers, at: location)
         }
@@ -188,10 +231,12 @@ struct CanvasView: View {
         if case .stroke(let s) = item, s.isEraser { return }
 
         let box = item.boundingBox()
+
+        // Selection rectangle
         var path = Path(roundedRect: box.insetBy(dx: -4, dy: -4), cornerRadius: 4)
         context.stroke(path, with: .color(.accentColor), lineWidth: 1)
 
-        // 8 resize handles
+        // 8 resize handles: white fill with accent border
         let handles: [CGPoint] = [
             CGPoint(x: box.minX, y: box.minY),
             CGPoint(x: box.midX, y: box.minY),
@@ -204,15 +249,18 @@ struct CanvasView: View {
         ]
         for c in handles {
             let rect = CGRect(x: c.x - overlayHandleSize/2, y: c.y - overlayHandleSize/2, width: overlayHandleSize, height: overlayHandleSize)
-            path = Path(roundedRect: rect, cornerRadius: 2)
-            context.fill(path, with: .color(.accentColor))
+            let handlePath = Path(roundedRect: rect, cornerRadius: 2)
+            context.fill(handlePath, with: .color(.white))
+            context.stroke(handlePath, with: .color(.accentColor), lineWidth: 1)
         }
 
-        // Rotation handle
+        // Rotation handle: circular, connected by a line
         let rotCenter = CGPoint(x: box.midX, y: box.minY - 16)
         let rotRect = CGRect(x: rotCenter.x - overlayHandleSize/2, y: rotCenter.y - overlayHandleSize/2, width: overlayHandleSize, height: overlayHandleSize)
-        path = Path(roundedRect: rotRect, cornerRadius: 2)
-        context.fill(path, with: .color(.accentColor))
+        let rotPath = Path(ellipseIn: rotRect)
+        context.fill(rotPath, with: .color(.white))
+        context.stroke(rotPath, with: .color(.accentColor), lineWidth: 1)
+
         var connector = Path()
         connector.move(to: CGPoint(x: box.midX, y: box.minY))
         connector.addLine(to: rotCenter)
@@ -1028,6 +1076,17 @@ struct CanvasView: View {
             }
         } else {
             selectedItemID = nil
+        }
+    }
+
+    // MARK: - Cursor helper
+
+    private func cursorForTool(_ tool: Tool) -> NSCursor {
+        switch tool {
+        case .select:
+            return .arrow
+        case .brush, .eraser, .line, .rectangle, .ellipse, .bucket:
+            return .crosshair
         }
     }
 }

@@ -13,11 +13,9 @@ struct ToolsPanelView: View {
     // External action to import an image
     var importImageAction: () -> Void = {}
 
-    // Fixed colors for consistent appearance on white background
-    private let selectionFill = Color.black.opacity(0.12)   // selected row background
-    private let hoverFill = Color.black.opacity(0.06)       // hover row background
-    private let iconColor = Color.black                      // tool icons
-    private let textColor = Color.black                      // labels
+    // Dynamic, appearance-friendly colors
+    private let selectionFill = Color.accentColor.opacity(0.15)
+    private let hoverFill = Color.primary.opacity(0.06)
 
     var body: some View {
         VStack(spacing: 8) {
@@ -26,32 +24,25 @@ struct ToolsPanelView: View {
                     currentTool = tool
                 } label: {
                     HStack(spacing: 8) {
-                        // Leading icons
                         if tool == .bucket {
-                            // Show both the bucket and an extra droplet icon on the left
                             HStack(spacing: 4) {
                                 Image(systemName: tool.systemImage)
                                     .font(.system(size: 16, weight: .medium))
-                                    .symbolRenderingMode(.monochrome)
-                                    .foregroundStyle(iconColor)
                                 Image(systemName: "drop.fill")
                                     .font(.system(size: 12, weight: .semibold))
-                                    .symbolRenderingMode(.monochrome)
-                                    .foregroundStyle(iconColor)
                                     .opacity(0.95)
                             }
+                            .foregroundStyle(.primary)
                         } else {
                             Image(systemName: tool.systemImage)
                                 .font(.system(size: 16, weight: .medium))
-                                .symbolRenderingMode(.monochrome)
-                                .foregroundStyle(iconColor)
+                                .foregroundStyle(.primary)
                         }
 
-                        // Text
                         Text(tool.displayName)
                             .font(.caption)
                             .lineLimit(1)
-                            .foregroundStyle(textColor)
+                            .foregroundStyle(.primary)
 
                         Spacer(minLength: 0)
                     }
@@ -74,7 +65,6 @@ struct ToolsPanelView: View {
                 .help(tool.displayName)
             }
 
-            // Place "Import Image…" button underneath the tool list
             Divider().padding(.vertical, 4)
 
             Button {
@@ -83,12 +73,11 @@ struct ToolsPanelView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "photo.on.rectangle")
                         .font(.system(size: 16, weight: .medium))
-                        .symbolRenderingMode(.monochrome)
-                        .foregroundStyle(iconColor)
+                        .foregroundStyle(.primary)
                     Text("Import Image…")
                         .font(.caption)
                         .lineLimit(1)
-                        .foregroundStyle(textColor)
+                        .foregroundStyle(.primary)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 10)
@@ -106,7 +95,7 @@ struct ToolsPanelView: View {
         }
         .padding(8)
         .frame(width: 140)
-        .background(Color.white)
+        .background(Color(nsColor: .windowBackgroundColor))
         .overlay(Divider(), alignment: .trailing)
     }
 }

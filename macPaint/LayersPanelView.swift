@@ -14,6 +14,7 @@ struct LayersPanelView: View {
 
     @State private var renamingLayerID: UUID? = nil
     @FocusState private var isRenamingFocused: Bool
+    @State private var hoveredLayerID: UUID? = nil
 
     var addLayer: () -> Void
     var removeSelectedLayer: () -> Void
@@ -52,7 +53,7 @@ struct LayersPanelView: View {
                     selectedLayerIndex = clampIndex(selectedLayerIndex, for: layers)
                 }
             })) {
-                ForEach(Array(layers.enumerated()), id: \.1.id) { initialIndex, layer in
+                ForEach(Array(layers.enumerated()), id: \.1.id) { _, layer in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             if renamingLayerID == layer.id {
@@ -117,8 +118,7 @@ struct LayersPanelView: View {
                             ), in: 0...1)
                         }
 
-                        // Move controls: always visible; enabled based on possible movement in list order.
-                        // Up = move toward top of the list (lower index). Down = move toward bottom (higher index).
+                        // Move controls
                         HStack(spacing: 8) {
                             Button {
                                 if let idx = currentIndex(for: layer.id) {
@@ -151,15 +151,22 @@ struct LayersPanelView: View {
                             }())
                         }
                     }
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 4)
                     .contentShape(Rectangle())
                     .background({
-                        if let idx = currentIndex(for: layer.id), idx == selectedLayerIndex {
-                            Color.accentColor.opacity(0.1)
-                        } else {
-                            Color.clear
-                        }
+                        let isSelected = (currentIndex(for: layer.id) == selectedLayerIndex)
+                        let isHovered = (hoveredLayerID == layer.id)
+                        return RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(
+                                isSelected
+                                ? Color.accentColor.opacity(0.12)
+                                : (isHovered ? Color.primary.opacity(0.05) : Color.clear)
+                            )
                     }())
+                    .onHover { hovering in
+                        hoveredLayerID = hovering ? layer.id : (hoveredLayerID == layer.id ? nil : hoveredLayerID)
+                    }
                     .onTapGesture {
                         if let idx = currentIndex(for: layer.id) {
                             selectedLayerIndex = idx
@@ -219,24 +226,20 @@ struct LayersPanelView: View {
     // MARK: - Movement helpers (list-order semantics)
 
     private func canMoveRowUp(_ index: Int) -> Bool {
-        // Up in the list = toward lower index
         return layers.indices.contains(index) && index > 0
     }
 
     private func canMoveRowDown(_ index: Int) -> Bool {
-        // Down in the list = toward higher index
         return layers.indices.contains(index) && index < layers.count - 1
     }
 
     private func moveRowUp(_ index: Int) {
         guard canMoveRowUp(index) else { return }
         let before = layers
-        // Move item at 'index' to 'index - 1'
         layers.move(fromOffsets: IndexSet(integer: index), toOffset: index - 1)
         let after = layers
         registerUndoLayersChange(action: "Move Layer Up", before: before, after: after)
 
-        // Adjust selection
         if selectedLayerIndex == index {
             selectedLayerIndex = index - 1
         } else if selectedLayerIndex == index - 1 {
@@ -247,12 +250,10 @@ struct LayersPanelView: View {
     private func moveRowDown(_ index: Int) {
         guard canMoveRowDown(index) else { return }
         let before = layers
-        // Move item at 'index' to just after 'index + 1'
         layers.move(fromOffsets: IndexSet(integer: index), toOffset: index + 2)
         let after = layers
         registerUndoLayersChange(action: "Move Layer Down", before: before, after: after)
 
-        // Adjust selection
         if selectedLayerIndex == index {
             selectedLayerIndex = index + 1
         } else if selectedLayerIndex == index + 1 {
@@ -264,7 +265,6 @@ struct LayersPanelView: View {
 
     private func deleteLayer(at index: Int) {
         guard layers.indices.contains(index) else { return }
-        // Allow deletion of any layer as long as at least one remains
         guard layers.count > 1 else { return }
 
         let before = layers
@@ -272,7 +272,6 @@ struct LayersPanelView: View {
 
         layers.remove(at: index)
 
-        // Maintain a sane selection after deletion
         if selectedLayerIndex == index {
             selectedLayerIndex = min(index, max(0, layers.count - 1))
         } else if selectedLayerIndex > index {
@@ -313,11 +312,9 @@ struct LayersPanelView: View {
     private func registerUndo(_ actionName: String, undo: @escaping () -> Void, redo: @escaping () -> Void) {
         guard let undoManager = undoManager else { return }
 
-        // Use the UndoManager itself as the AnyObject target and avoid recursive re-registration.
         undoManager.registerUndo(withTarget: undoManager) { _ in
             undo()
             undoManager.setActionName(actionName)
-            // Register redo
             undoManager.registerUndo(withTarget: undoManager) { _ in
                 redo()
                 undoManager.setActionName(actionName)
