@@ -86,6 +86,18 @@ struct ContentView: View {
             customHeight = String(Int(canvasSize.height))
             initializeLayers()
             lastBackgroundColorForUndo = backgroundColor
+
+            // Listen for image drop events from CanvasView
+            NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("CreateImageFromDrop"),
+                object: nil,
+                queue: .main
+            ) { notification in
+                guard let userInfo = notification.userInfo,
+                      let imageData = userInfo["imageData"] as? Data,
+                      let position = userInfo["position"] as? CGPoint else { return }
+                createImageItem(from: imageData, at: position)
+            }
         }
         // Background color undo registration (coarse; fires frequently during dragging)
         .onChange(of: backgroundColor) { newValue in
@@ -441,68 +453,99 @@ struct ContentView: View {
                 return
             }
 
-            // Decode image
-            guard let nsImage = NSImage(data: imageData) else {
-                let alert = NSAlert()
-                alert.messageText = "Unsupported image format"
-                alert.informativeText = "The selected file could not be decoded as an image."
-                alert.alertStyle = .warning
-                alert.runModal()
-                return
-            }
+            // Use helper to create and position image (centered)
+            createImageItem(from: imageData, at: nil)
+        }
+    }
 
-            let beforeLayers = layers
-            let beforeSelectionLayer = selectedLayerIndex
-            let beforeSelectedItem = selectedItemID
+    // Helper function to create an image item from data
+    // If position is nil, centers the image on canvas
+    // If layers.count == 1, adds to existing layer; otherwise creates new layer
+    func createImageItem(from imageData: Data, at position: CGPoint?) {
+        // Decode image
+        guard let nsImage = NSImage(data: imageData) else {
+            let alert = NSAlert()
+            alert.messageText = "Unsupported image format"
+            alert.informativeText = "The selected file could not be decoded as an image."
+            alert.alertStyle = .warning
+            alert.runModal()
+            return
+        }
 
-            // Compute a target rect that fits the image nicely within the canvas (max 70% of canvas)
-            let canvasW = canvasSize.width
-            let canvasH = canvasSize.height
-            let maxW = canvasW * 0.7
-            let maxH = canvasH * 0.7
+        let beforeLayers = layers
+        let beforeSelectionLayer = selectedLayerIndex
+        let beforeSelectedItem = selectedItemID
 
-            let imgSize = nsImage.size
-            let scale = min(maxW / max(1, imgSize.width), maxH / max(1, imgSize.height), 1.0)
-            let drawW = imgSize.width * scale
-            let drawH = imgSize.height * scale
-            let rect = CGRect(
+        // Compute a target rect that fits the image nicely within the canvas (max 70% of canvas)
+        let canvasW = canvasSize.width
+        let canvasH = canvasSize.height
+        let maxW = canvasW * 0.7
+        let maxH = canvasH * 0.7
+
+        let imgSize = nsImage.size
+        let scale = min(maxW / max(1, imgSize.width), maxH / max(1, imgSize.height), 1.0)
+        let drawW = imgSize.width * scale
+        let drawH = imgSize.height * scale
+
+        // Use provided position or center on canvas
+        let rect: CGRect
+        if let pos = position {
+            // Position at drop location (centered on the point)
+            rect = CGRect(
+                x: pos.x - drawW / 2.0,
+                y: pos.y - drawH / 2.0,
+                width: drawW,
+                height: drawH
+            )
+        } else {
+            // Center on canvas
+            rect = CGRect(
                 x: (canvasW - drawW) / 2.0,
                 y: (canvasH - drawH) / 2.0,
                 width: drawW,
                 height: drawH
             )
+        }
 
+        // Create the image item
+        let imageItem = ImageItem(imageData: imageData, rect: rect, rotation: 0, scale: .init(width: 1, height: 1))
+        let drawable = Drawable.image(imageItem)
+
+        // Smart layer logic: if only 1 layer, add to it; otherwise create new layer
+        let targetLayerIndex: Int
+        if layers.count == 1 {
+            // Add to existing single layer
+            targetLayerIndex = 0
+            layers[targetLayerIndex].items.append(drawable)
+        } else {
             // Create a new layer above the current one
             layerCounter += 1
             let newLayerName = "Image \(layerCounter)"
             let insertIndex = min(selectedLayerIndex + 1, layers.count)
             insertNewLayer(named: newLayerName, at: insertIndex)
+            targetLayerIndex = insertIndex
+            layers[targetLayerIndex].items.append(drawable)
+        }
 
-            // Create the image item and add to the new layer
-            let imageItem = ImageItem(imageData: imageData, rect: rect, rotation: 0, scale: .init(width: 1, height: 1))
-            let drawable = Drawable.image(imageItem)
-            layers[insertIndex].items.append(drawable)
+        // Select the target layer and the imported image
+        selectedLayerIndex = targetLayerIndex
+        selectedItemID = drawable.id
 
-            // Select the new layer and the imported image
-            selectedLayerIndex = insertIndex
-            selectedItemID = drawable.id
+        // Switch to Select tool so the user can immediately resize/move the image
+        currentTool = .select
 
-            // Switch to Select tool so the user can immediately resize/move the image
-            currentTool = .select
+        let afterLayers = layers
+        let afterSelectionLayer = selectedLayerIndex
+        let afterSelectedItem = selectedItemID
 
-            let afterLayers = layers
-            let afterSelectionLayer = selectedLayerIndex
-            let afterSelectedItem = selectedItemID
-
-            registerUndo("Import Image") {
-                layers = beforeLayers
-                selectedLayerIndex = beforeSelectionLayer
-                selectedItemID = beforeSelectedItem
-            } redo: {
-                layers = afterLayers
-                selectedLayerIndex = afterSelectionLayer
-                selectedItemID = afterSelectedItem
-            }
+        registerUndo("Add Image") {
+            layers = beforeLayers
+            selectedLayerIndex = beforeSelectionLayer
+            selectedItemID = beforeSelectedItem
+        } redo: {
+            layers = afterLayers
+            selectedLayerIndex = afterSelectionLayer
+            selectedItemID = afterSelectedItem
         }
     }
 

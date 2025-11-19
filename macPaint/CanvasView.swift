@@ -6,6 +6,7 @@
 
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct CanvasView: View {
     @Environment(\.undoManager) private var undoManager
@@ -52,6 +53,9 @@ struct CanvasView: View {
     @State private var showBucketFlash: Bool = false
     @State private var bucketFlashOpacity: Double = 0.0
     @State private var toastMessage: String? = nil
+
+    // Drag-and-drop state
+    @State private var isImageDropTargeted: Bool = false
 
     var body: some View {
         ZStack {
@@ -151,6 +155,16 @@ struct CanvasView: View {
                 .allowsHitTesting(false)
                 .transition(.opacity)
             }
+
+            // Drop target indicator
+            if isImageDropTargeted {
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 3, dash: [10, 5]))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
         }
         .background(
             GeometryReader { proxy in
@@ -164,6 +178,9 @@ struct CanvasView: View {
         .animation(.easeInOut(duration: 0.2), value: canvasSize)
         .animation(.easeInOut(duration: 0.2), value: zoom)
         .gesture(primaryGesture())
+        .onDrop(of: [.image], isTargeted: $isImageDropTargeted) { providers, location in
+            handleImageDrop(providers: providers, at: location)
+        }
     }
 
     private func drawSelectionOverlay(for item: Drawable, in context: GraphicsContext) {
@@ -944,6 +961,57 @@ struct CanvasView: View {
         let dx = p.x - c.x, dy = p.y - c.y
         let cosT = cos(theta), sinT = sin(theta)
         return CGPoint(x: c.x + dx * cosT - dy * sinT, y: c.y + dx * sinT + dy * cosT)
+    }
+
+    // MARK: - Drag and Drop
+
+    private func handleImageDrop(providers: [NSItemProvider], at location: CGPoint) -> Bool {
+        // Process all image providers
+        var droppedCount = 0
+        let group = DispatchGroup()
+
+        for provider in providers {
+            guard provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) else { continue }
+
+            group.enter()
+            provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, error in
+                defer { group.leave() }
+
+                guard let data = data, error == nil else { return }
+
+                // Map drop location to canvas coordinates
+                let canvasPoint = logicalPoint(from: location)
+
+                // Call ContentView's helper on main thread
+                DispatchQueue.main.async {
+                    // Access the ContentView binding to call createImageItem
+                    // Since we're in CanvasView, we need to pass this through a binding or callback
+                    // For now, we'll use a workaround by creating a NotificationCenter event
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("CreateImageFromDrop"),
+                        object: nil,
+                        userInfo: ["imageData": data, "position": canvasPoint]
+                    )
+                    droppedCount += 1
+                }
+            }
+        }
+
+        // Wait for all drops to complete
+        group.notify(queue: .main) {
+            if droppedCount > 0 {
+                // Show success feedback
+                let message = droppedCount == 1 ? "Image added" : "\(droppedCount) images added"
+                toastMessage = message
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        toastMessage = nil
+                    }
+                }
+            }
+        }
+
+        return providers.contains { $0.hasItemConformingToTypeIdentifier(UTType.image.identifier) }
     }
 
     // MARK: - Selection safety
