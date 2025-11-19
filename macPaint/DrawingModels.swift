@@ -609,16 +609,28 @@ enum Drawable: Identifiable, Hashable {
 
             ctx.saveGState()
             ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+
+            // Apply rotation around the rect center (if any)
             if i.rotation != 0 {
                 let center = CGPoint(x: rect.midX, y: rect.midY)
                 ctx.translateBy(x: center.x, y: center.y)
                 ctx.rotate(by: i.rotation)
                 ctx.translateBy(x: -center.x, y: -center.y)
             }
+
+            // Overall opacity and quality
             ctx.setAlpha(layerOpacity)
             ctx.interpolationQuality = .high
-            ctx.draw(cgImage, in: rect)
 
+            // IMPORTANT: Compensate for y-down export context when drawing CGImage.
+            // Flip the image vertically within its rect so it matches SwiftUI Canvas.
+            ctx.saveGState()
+            ctx.translateBy(x: rect.origin.x, y: rect.origin.y + rect.size.height)
+            ctx.scaleBy(x: 1, y: -1)
+            ctx.draw(cgImage, in: CGRect(origin: .zero, size: rect.size))
+            ctx.restoreGState()
+
+            // Erasers are vector strokes in item-local space; no flip needed.
             for er in i.erasers where er.points.count > 1 {
                 ctx.setBlendMode(.destinationOut)
                 ctx.setStrokeColor(NSColor.black.cgColor)
@@ -671,4 +683,3 @@ extension NSImage {
         return cgImage
     }
 }
-
