@@ -460,7 +460,7 @@ struct ContentView: View {
 
     // Helper function to create an image item from data
     // If position is nil, centers the image on canvas
-    // If layers.count == 1, adds to existing layer; otherwise creates new layer
+    // Always creates a new layer above the current selection for each image
     func createImageItem(from imageData: Data, at position: CGPoint?) {
         // Decode image
         guard let nsImage = NSImage(data: imageData) else {
@@ -511,24 +511,16 @@ struct ContentView: View {
         let imageItem = ImageItem(imageData: imageData, rect: rect, rotation: 0, scale: .init(width: 1, height: 1))
         let drawable = Drawable.image(imageItem)
 
-        // Smart layer logic: if only 1 layer, add to it; otherwise create new layer
-        let targetLayerIndex: Int
-        if layers.count == 1 {
-            // Add to existing single layer
-            targetLayerIndex = 0
-            layers[targetLayerIndex].items.append(drawable)
-        } else {
-            // Create a new layer above the current one
-            layerCounter += 1
-            let newLayerName = "Image \(layerCounter)"
-            let insertIndex = min(selectedLayerIndex + 1, layers.count)
-            insertNewLayer(named: newLayerName, at: insertIndex)
-            targetLayerIndex = insertIndex
-            layers[targetLayerIndex].items.append(drawable)
-        }
+        // Always create a new layer above the current selection
+        let insertIndex = min(selectedLayerIndex + 1, layers.count)
+        layerCounter += 1
+        let newLayerName = "Image \(layerCounter)"
+        let newLayer = Layer(name: newLayerName)
+        layers.insert(newLayer, at: insertIndex)
+        layers[insertIndex].items.append(drawable)
 
-        // Select the target layer and the imported image
-        selectedLayerIndex = targetLayerIndex
+        // Select the new layer and the imported image
+        selectedLayerIndex = insertIndex
         selectedItemID = drawable.id
 
         // Switch to Select tool so the user can immediately resize/move the image
